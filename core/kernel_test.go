@@ -16,6 +16,7 @@ func TestSingBoxKernelGenerateConfig(t *testing.T) {
 			{Name: "socks-in", Protocol: "socks5", Port: 2081, Username: "in-user", Password: "in-pass"},
 			{Name: "reality-in", Protocol: "vless", Port: 2082, UUID: "bf000d23-0752-40b4-affe-68f7707a9661", Security: "reality", ServerName: "addons.mozilla.org", PrivateKey: "private", ShortID: "abcd", RealityHandshakeServer: "addons.mozilla.org", RealityHandshakePort: 443},
 			{Name: "anytls-in", Protocol: "anytls", Port: 2083, Password: "secret", TLS: true, ServerName: "example.com"},
+			{Name: "shadowtls-in", Protocol: "shadowtls", Port: 2084, Password: "secret", ServerName: "addons.mozilla.org", RealityHandshakeServer: "addons.mozilla.org", RealityHandshakePort: 443},
 		},
 		Outbounds: []OutboundConfig{
 			{Name: "remote", Protocol: "vless", Address: "127.0.0.1", Port: 2080, UUID: "bf000d23-0752-40b4-affe-68f7707a9661", TLS: true, ServerName: "example.com", Transport: "tcp"},
@@ -67,6 +68,10 @@ func TestSingBoxKernelGenerateConfig(t *testing.T) {
 	anyTLSInbound := inbounds[4].(map[string]any)
 	if anyTLSInbound["type"] != "anytls" || anyTLSInbound["tls"] == nil {
 		t.Fatalf("expected anytls inbound with tls, got %#v", anyTLSInbound)
+	}
+	shadowTLSInbound := inbounds[5].(map[string]any)
+	if shadowTLSInbound["type"] != "shadowtls" || shadowTLSInbound["version"] != float64(3) {
+		t.Fatalf("expected shadowtls v3 inbound, got %#v", shadowTLSInbound)
 	}
 	outbounds := cfg["outbounds"].([]any)
 	vless := outbounds[1].(map[string]any)

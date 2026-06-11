@@ -520,6 +520,20 @@ pre {
   grid-column: 1 / -1;
 }
 
+.qr-wrap {
+  display: flex;
+  justify-content: center;
+  padding: 10px;
+}
+
+.qr-wrap img {
+  width: 220px;
+  height: 220px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fff;
+}
+
 .form-error {
   min-height: 20px;
   margin: 0;

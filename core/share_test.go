@@ -42,4 +42,18 @@ func TestGenerateRealityKeyPairAndShareLinks(t *testing.T) {
 	if !strings.Contains(link, "anytls://") || !strings.Contains(link, "peer=example.com") {
 		t.Fatalf("unexpected anytls link: %s", link)
 	}
+
+	for _, inbound := range []InboundConfig{
+		{Name: "trojan-in", Protocol: "trojan", Port: 443, Password: "secret", ServerName: "example.com", TLS: true},
+		{Name: "ss-in", Protocol: "shadowsocks", Port: 8388, Method: "2022-blake3-aes-128-gcm", Password: "secret"},
+		{Name: "shadowtls-in", Protocol: "shadowtls", Port: 8443, Password: "secret", ServerName: "addons.mozilla.org", RealityHandshakeServer: "addons.mozilla.org", RealityHandshakePort: 443},
+	} {
+		link, err = inboundShareLink(inbound, "node.example.com")
+		if err != nil {
+			t.Fatalf("inboundShareLink returned error for %s: %v", inbound.Protocol, err)
+		}
+		if !strings.Contains(link, inbound.Protocol) && !(inbound.Protocol == "shadowsocks" && strings.Contains(link, "ss://")) {
+			t.Fatalf("unexpected %s link: %s", inbound.Protocol, link)
+		}
+	}
 }

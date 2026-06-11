@@ -252,9 +252,12 @@ func (i InboundConfig) Validate() error {
 				return fmt.Errorf("inbound %q requires valid reality_handshake_port for vless reality", i.Name)
 			}
 		}
-	case "trojan":
+	case "trojan", "shadowtls":
 		if i.Password == "" {
-			return fmt.Errorf("inbound %q requires password for trojan", i.Name)
+			return fmt.Errorf("inbound %q requires password for %s", i.Name, i.Protocol)
+		}
+		if i.Protocol == "shadowtls" && i.RealityHandshakeServer == "" {
+			return fmt.Errorf("inbound %q requires reality_handshake_server for shadowtls", i.Name)
 		}
 	case "anytls":
 		if i.Password == "" {
@@ -321,7 +324,7 @@ func (o OutboundConfig) Validate() error {
 
 func isSupportedInboundProtocol(protocol string) bool {
 	switch protocol {
-	case "mixed", "socks", "socks5", "http", "vless", "anytls", "vmess", "trojan", "shadowsocks", "ss", "forward-tcp", "forward-udp":
+	case "mixed", "socks", "socks5", "http", "vless", "anytls", "vmess", "trojan", "shadowtls", "shadowsocks", "ss", "forward-tcp", "forward-udp":
 		return true
 	default:
 		return false

@@ -112,7 +112,51 @@ func inboundShareLink(inbound InboundConfig, publicHost string) (string, error) 
 			values.Set("security", "tls")
 		}
 		return "anytls://" + url.QueryEscape(inbound.Password) + "@" + hostPort + "?" + values.Encode() + "#" + fragment, nil
+	case "trojan":
+		values := url.Values{}
+		if inbound.TLS || inbound.ServerName != "" {
+			values.Set("security", "tls")
+			values.Set("sni", inbound.ServerName)
+		}
+		if inbound.Transport != "" && inbound.Transport != "tcp" {
+			values.Set("type", inbound.Transport)
+		}
+		addQueryValue(values, "path", inbound.Path)
+		addQueryValue(values, "host", inbound.Host)
+		return "trojan://" + url.QueryEscape(inbound.Password) + "@" + hostPort + "?" + values.Encode() + "#" + fragment, nil
+	case "vmess":
+		values := url.Values{}
+		values.Set("encryption", "auto")
+		if inbound.TLS || inbound.ServerName != "" {
+			values.Set("security", "tls")
+			values.Set("sni", inbound.ServerName)
+		}
+		if inbound.Transport != "" && inbound.Transport != "tcp" {
+			values.Set("type", inbound.Transport)
+		}
+		addQueryValue(values, "path", inbound.Path)
+		addQueryValue(values, "host", inbound.Host)
+		return "vmess://" + inbound.UUID + "@" + hostPort + "?" + values.Encode() + "#" + fragment, nil
+	case "shadowsocks", "ss":
+		userInfo := base64.RawURLEncoding.EncodeToString([]byte(inbound.Method + ":" + inbound.Password))
+		return "ss://" + userInfo + "@" + hostPort + "#" + fragment, nil
+	case "shadowtls":
+		values := url.Values{}
+		values.Set("version", "3")
+		values.Set("security", "tls")
+		values.Set("sni", inbound.ServerName)
+		addQueryValue(values, "handshake", inbound.RealityHandshakeServer)
+		if inbound.RealityHandshakePort > 0 {
+			values.Set("handshake_port", strconv.Itoa(inbound.RealityHandshakePort))
+		}
+		return "shadowtls://:" + url.QueryEscape(inbound.Password) + "@" + hostPort + "?" + values.Encode() + "#" + fragment, nil
 	default:
 		return "", fmt.Errorf("share link is not supported for inbound protocol %s", inbound.Protocol)
+	}
+}
+
+func addQueryValue(values url.Values, key, value string) {
+	if value != "" {
+		values.Set(key, value)
 	}
 }

@@ -456,6 +456,17 @@ func singBoxInbounds(inbounds []InboundConfig) []map[string]any {
 			base["users"] = []map[string]any{{"password": inbound.Password}}
 			addSingBoxInboundTLS(base, inbound)
 			addSingBoxInboundTransport(base, inbound)
+		case "shadowtls":
+			base["type"] = "shadowtls"
+			base["version"] = 3
+			base["users"] = []map[string]any{{
+				"name":     firstNonEmpty(inbound.Username, inbound.Name),
+				"password": inbound.Password,
+			}}
+			base["handshake"] = map[string]any{
+				"server":      firstNonEmpty(inbound.RealityHandshakeServer, inbound.ServerName),
+				"server_port": firstNonZero(inbound.RealityHandshakePort, 443),
+			}
 		case "anytls":
 			base["type"] = "anytls"
 			base["users"] = []map[string]any{{"password": inbound.Password}}
@@ -756,6 +767,15 @@ func addOptional(target map[string]any, key string, value string) {
 	if value != "" {
 		target[key] = value
 	}
+}
+
+func firstNonZero(values ...int) int {
+	for _, value := range values {
+		if value != 0 {
+			return value
+		}
+	}
+	return 0
 }
 
 func addTLS(target map[string]any, outbound OutboundConfig) {

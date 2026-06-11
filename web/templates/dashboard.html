@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>NodeTools Agent</title>
-  <link rel="stylesheet" href="/static/css/style.css?v=20260612-8">
+  <link rel="stylesheet" href="/static/css/style.css?v=20260612-9">
 </head>
 <body>
   <div class="app-shell">
@@ -92,6 +92,7 @@
             <div class="panel-actions">
               <button type="button" class="ghost-button" data-batch-action="test" data-batch-scope="inbound">批量测速</button>
               <button type="button" class="ghost-button" data-batch-action="disable" data-batch-scope="inbound">批量停用</button>
+              <button type="button" class="ghost-button" id="openBatchInboundModalButton">批量搭建</button>
               <button type="button" id="openInboundModalButton">添加入站</button>
             </div>
           </div>
@@ -384,6 +385,7 @@ sudo sh /opt/nodetools-agent/current/rollback-offline.sh</textarea></label>
               <option value="vless">vless</option>
               <option value="vmess">vmess</option>
               <option value="trojan">trojan</option>
+              <option value="shadowtls">shadowtls</option>
               <option value="anytls">anytls</option>
             </select>
           </label>
@@ -420,8 +422,60 @@ sudo sh /opt/nodetools-agent/current/rollback-offline.sh</textarea></label>
         </div>
       </form>
     </section>
+
+    <section class="modal" id="batchInboundModal" role="dialog" aria-modal="true" aria-labelledby="batchInboundModalTitle" hidden>
+      <form id="batchInboundForm">
+        <div class="modal-header">
+          <h2 id="batchInboundModalTitle">批量搭建入站</h2>
+          <button type="button" class="close-button" data-close-modal>关闭</button>
+        </div>
+        <div class="modal-body two-column">
+          <label>名称前缀<input name="prefix" value="NodeTools"></label>
+          <label>起始端口<input name="start_port" type="number" min="1" max="65531" value="30000"></label>
+          <label>监听地址
+            <select name="listen">
+              <option value="0.0.0.0">0.0.0.0</option>
+              <option value="::">::</option>
+              <option value="127.0.0.1">127.0.0.1</option>
+            </select>
+          </label>
+          <label>选择出站
+            <select name="outbound" id="batchInboundOutboundSelect"></select>
+          </label>
+          <label>Reality 目标网站<input name="reality_server" value="addons.mozilla.org"></label>
+          <label>TLS Server Name<input name="server_name" value="addons.mozilla.org"></label>
+          <label class="check-label"><input name="vless_reality" type="checkbox" checked> VLESS Reality</label>
+          <label class="check-label"><input name="shadowtls" type="checkbox" checked> ShadowTLS v3</label>
+          <label class="check-label"><input name="shadowsocks" type="checkbox" checked> Shadowsocks</label>
+          <label class="check-label"><input name="trojan" type="checkbox" checked> Trojan</label>
+          <label class="check-label"><input name="anytls" type="checkbox" checked> AnyTLS</label>
+          <pre class="preview-box full-width" id="batchInboundResult"></pre>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="ghost-button" data-close-modal>取消</button>
+          <button type="submit">开始搭建</button>
+        </div>
+      </form>
+    </section>
+
+    <section class="modal" id="shareModal" role="dialog" aria-modal="true" aria-labelledby="shareModalTitle" hidden>
+      <div class="modal-header">
+        <h2 id="shareModalTitle">入站分享</h2>
+        <button type="button" class="close-button" data-close-modal>关闭</button>
+      </div>
+      <div class="modal-body">
+        <label>分享链接<textarea id="shareLinkText" rows="5" readonly></textarea></label>
+        <div class="qr-wrap">
+          <img id="shareQRCode" alt="分享二维码">
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="ghost-button" id="copyShareLinkButton">复制链接</button>
+        <button type="button" data-close-modal>关闭</button>
+      </div>
+    </section>
   </div>
 
-  <script src="/static/js/dashboard.js?v=20260612-8"></script>
+  <script src="/static/js/dashboard.js?v=20260612-9"></script>
 </body>
 </html>

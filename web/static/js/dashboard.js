@@ -16,6 +16,10 @@ const state = {
   config: {},
   status: {},
   configLoaded: false,
+  selected: {
+    inbound: new Set(),
+    outbound: new Set(),
+  },
 };
 
 const outboundProtocols = [
@@ -45,7 +49,7 @@ const fingerprints = ["chrome", "firefox", "safari", "ios", "android", "edge", "
 const alpnOptions = ["", "h2", "http/1.1", "h2,http/1.1", "h3"];
 const transportOptions = ["tcp", "ws", "http", "grpc"];
 const inboundListenOptions = ["0.0.0.0", "::", "127.0.0.1"];
-const localListenOptions = ["127.0.0.1", "::", "0.0.0.0"];
+const localListenOptions = ["0.0.0.0", "::", "127.0.0.1"];
 const tlsCertificateFields = [
   ["certificate_path", "TLS 证书路径", ""],
   ["key_path", "TLS 私钥路径", ""],
@@ -55,22 +59,22 @@ const tlsCertificateFields = [
 
 const inboundSchemas = {
   mixed: [
-    ["listen", "监听地址", "127.0.0.1", "select", localListenOptions],
+    ["listen", "监听地址", "0.0.0.0", "select", localListenOptions],
     ["username", "用户名", ""],
     ["password", "密码", "", "password"],
   ],
   socks: [
-    ["listen", "监听地址", "127.0.0.1", "select", localListenOptions],
+    ["listen", "监听地址", "0.0.0.0", "select", localListenOptions],
     ["username", "用户名", ""],
     ["password", "密码", "", "password"],
   ],
   socks5: [
-    ["listen", "监听地址", "127.0.0.1", "select", localListenOptions],
+    ["listen", "监听地址", "0.0.0.0", "select", localListenOptions],
     ["username", "用户名", ""],
     ["password", "密码", "", "password"],
   ],
   http: [
-    ["listen", "监听地址", "127.0.0.1", "select", localListenOptions],
+    ["listen", "监听地址", "0.0.0.0", "select", localListenOptions],
     ["username", "用户名", ""],
     ["password", "密码", "", "password"],
   ],
@@ -125,6 +129,13 @@ const inboundSchemas = {
     ["listen", "监听地址", "0.0.0.0", "select", inboundListenOptions],
     ["method", "加密方法", "", "select", ssMethods],
     ["password", "密码", "", "password"],
+  ],
+  shadowtls: [
+    ["listen", "监听地址", "0.0.0.0", "select", inboundListenOptions],
+    ["password", "ShadowTLS 密码", "", "password"],
+    ["server_name", "SNI / Server Name", "addons.mozilla.org"],
+    ["reality_handshake_server", "握手目标", "addons.mozilla.org"],
+    ["reality_handshake_port", "握手端口", "443", "number"],
   ],
 };
 
@@ -270,6 +281,13 @@ const randomHex = (bytes) => {
   return Array.from(data, (item) => item.toString(16).padStart(2, "0")).join("");
 };
 
+const randomPassword = (length = 18) => {
+  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
+  const data = new Uint8Array(length);
+  crypto.getRandomValues(data);
+  return Array.from(data, (item) => alphabet[item % alphabet.length]).join("");
+};
+
 const postJSON = async (url, body) => {
   const response = await fetch(url, {
     method: "POST",
@@ -294,7 +312,7 @@ const sendJSON = async (url, method, body) => {
 
 const formToObject = (form) => {
   const data = Object.fromEntries(new FormData(form).entries());
-  for (const key of ["port", "listen_port", "target_port", "alter_id", "up_mbps", "down_mbps", "reality_handshake_port", "min_idle_session"]) {
+  for (const key of ["port", "start_port", "listen_port", "target_port", "alter_id", "up_mbps", "down_mbps", "reality_handshake_port", "min_idle_session"]) {
     if (key in data && data[key] !== "") data[key] = Number(data[key]);
   }
   for (const checkbox of form.querySelectorAll('input[type="checkbox"]')) {
@@ -409,14 +427,14 @@ const renderInbounds = () => {
         <td><span class="badge" title="${escapeHTML(node.last_error || "")}">${escapeHTML(node.status)}</span></td>
         <td>
           <div class="row-actions">
-            <button class="icon-button" data-test-type="inbound" data-test-name="${escapeHTML(node.name)}" type="button">测速</button>
+            <button class="icon-button" data-test-type="inbound" data-test-name="${escapeHTML(node.name)}" type="button">连通测试</button>
             <button class="icon-button" data-edit-inbound="${escapeHTML(node.name)}" type="button">编辑</button>
             <button class="icon-button" data-share-inbound="${escapeHTML(node.name)}" type="button">分享</button>
             <button class="icon-button" data-toggle-type="inbound" data-toggle-name="${escapeHTML(node.name)}" data-toggle-enabled="${node.enabled ? "false" : "true"}" type="button">${node.enabled ? "停用" : "启用"}</button>
             <button class="icon-button" data-delete-type="inbound" data-delete-name="${escapeHTML(node.name)}" type="button">删除</button>
           </div>
         </td>
-        <td><input type="checkbox" data-node-check="inbound" value="${escapeHTML(node.name)}"></td>
+        <td><input type="checkbox" data-node-check="inbound" value="${escapeHTML(node.name)}"${state.selected.inbound.has(node.name) ? " checked" : ""}></td>
       </tr>
     `;
   }).join("") || `<tr><td colspan="10" class="empty-cell">还没有入站，点击“添加入站”创建本地代理端口。</td></tr>`;
@@ -442,12 +460,12 @@ const renderOutbounds = () => {
       <td><span class="badge" title="${escapeHTML(node.last_error || "")}">${escapeHTML(node.status)}</span></td>
       <td>
         <div class="row-actions">
-          <button class="icon-button" data-test-type="outbound" data-test-name="${escapeHTML(node.name)}" type="button">测速</button>
+          <button class="icon-button" data-test-type="outbound" data-test-name="${escapeHTML(node.name)}" type="button">连通测试</button>
           <button class="icon-button" data-toggle-type="outbound" data-toggle-name="${escapeHTML(node.name)}" data-toggle-enabled="${node.enabled ? "false" : "true"}" type="button">${node.enabled ? "停用" : "启用"}</button>
           <button class="icon-button" data-delete-type="outbound" data-delete-name="${escapeHTML(node.name)}" type="button">删除</button>
         </div>
       </td>
-      <td><input type="checkbox" data-node-check="outbound" value="${escapeHTML(node.name)}"></td>
+      <td><input type="checkbox" data-node-check="outbound" value="${escapeHTML(node.name)}"${state.selected.outbound.has(node.name) ? " checked" : ""}></td>
     </tr>
   `).join("") || `<tr><td colspan="10" class="empty-cell">还没有出站节点，可以导入链接或手动添加。</td></tr>`;
 };
@@ -482,6 +500,12 @@ const renderOutboundOptions = () => {
       .map((node) => `<option value="${escapeHTML(node.name)}">${escapeHTML(node.name)} / ${escapeHTML(node.protocol)}</option>`)
       .join("");
     defaultSelect.value = current;
+  }
+  const batchSelect = document.getElementById("batchInboundOutboundSelect");
+  if (batchSelect) {
+    batchSelect.innerHTML = outbounds.length
+      ? outbounds.map((node) => `<option value="${escapeHTML(node.name)}">${escapeHTML(node.name)} / ${escapeHTML(node.protocol)}</option>`).join("")
+      : `<option value="">请先添加出站节点</option>`;
   }
 };
 
@@ -815,6 +839,97 @@ const renderOutboundFields = () => {
   container.innerHTML = (outboundSchemas[protocol] || outboundSchemas.vless).map(fieldControl).join("");
 };
 
+const showShareLink = async (name, link) => {
+  const text = document.getElementById("shareLinkText");
+  const qr = document.getElementById("shareQRCode");
+  if (text) text.value = link;
+  if (qr) {
+    qr.src = `https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=${encodeURIComponent(link)}`;
+  }
+  openModal("shareModal");
+  await navigator.clipboard?.writeText(link);
+};
+
+const selectedBatchProtocols = (form) => [
+  ["vless_reality", "vless-reality"],
+  ["shadowtls", "shadowtls"],
+  ["shadowsocks", "shadowsocks"],
+  ["trojan", "trojan"],
+  ["anytls", "anytls"],
+].filter(([field]) => form.elements[field]?.checked).map(([, protocol]) => protocol);
+
+const buildBatchInboundPayload = async (protocol, base) => {
+  const name = `${base.prefix}-${protocol}`;
+  const common = {
+    name,
+    listen: base.listen,
+    port: base.port,
+    outbound: base.outbound,
+  };
+  switch (protocol) {
+  case "vless-reality": {
+    const keyPair = await postJSON("/api/reality/keypair", {});
+    return {
+      ...common,
+      name: `${base.prefix}-VLESS-Reality`,
+      protocol: "vless",
+      uuid: crypto.randomUUID(),
+      flow: "xtls-rprx-vision",
+      security: "reality",
+      tls: true,
+      server_name: base.serverName,
+      private_key: keyPair.private_key,
+      short_id: ["", randomHex(4), randomHex(6), randomHex(8)].join(","),
+      reality_handshake_server: base.realityServer,
+      reality_handshake_port: 443,
+      transport: "tcp",
+    };
+  }
+  case "shadowtls":
+    return {
+      ...common,
+      name: `${base.prefix}-ShadowTLS-v3`,
+      protocol: "shadowtls",
+      password: randomPassword(),
+      server_name: base.serverName,
+      reality_handshake_server: base.realityServer,
+      reality_handshake_port: 443,
+    };
+  case "shadowsocks":
+    return {
+      ...common,
+      name: `${base.prefix}-Shadowsocks`,
+      protocol: "shadowsocks",
+      method: "2022-blake3-aes-128-gcm",
+      password: randomPassword(24),
+    };
+  case "trojan":
+    return {
+      ...common,
+      name: `${base.prefix}-Trojan`,
+      protocol: "trojan",
+      password: randomPassword(),
+      tls: true,
+      server_name: base.serverName,
+      transport: "tcp",
+    };
+  case "anytls":
+    return {
+      ...common,
+      name: `${base.prefix}-AnyTLS`,
+      protocol: "anytls",
+      password: randomPassword(),
+      tls: true,
+      server_name: base.serverName,
+      idle_session_check: "30s",
+      idle_session_timeout: "30s",
+      min_idle_session: 5,
+    };
+  default:
+    throw new Error(`不支持的批量协议: ${protocol}`);
+  }
+};
+
 document.querySelectorAll("[data-page-target]").forEach((button) => {
   button.addEventListener("click", () => showPage(button.dataset.pageTarget));
 });
@@ -834,6 +949,14 @@ document.getElementById("openInboundModalButton")?.addEventListener("click", () 
   renderOutboundOptions();
   openModal("inboundModal");
 });
+document.getElementById("openBatchInboundModalButton")?.addEventListener("click", () => {
+  const form = document.getElementById("batchInboundForm");
+  form?.reset();
+  renderOutboundOptions();
+  const result = document.getElementById("batchInboundResult");
+  if (result) result.textContent = "";
+  openModal("batchInboundModal");
+});
 document.getElementById("openOutboundModalButton")?.addEventListener("click", () => openModal("outboundModal"));
 document.querySelectorAll("[data-close-modal]").forEach((button) => button.addEventListener("click", closeModal));
 document.getElementById("modalBackdrop")?.addEventListener("click", (event) => {
@@ -850,10 +973,25 @@ renderInboundFields();
 renderOutboundFields();
 
 document.addEventListener("change", (event) => {
+  const nodeCheck = event.target.closest("[data-node-check]");
+  if (nodeCheck) {
+    const scope = nodeCheck.dataset.nodeCheck;
+    if (nodeCheck.checked) {
+      state.selected[scope]?.add(nodeCheck.value);
+    } else {
+      state.selected[scope]?.delete(nodeCheck.value);
+    }
+    return;
+  }
   const selectAll = event.target.closest("[data-select-all]");
   if (!selectAll) return;
   document.querySelectorAll(`[data-node-check="${selectAll.dataset.selectAll}"]`).forEach((checkbox) => {
     checkbox.checked = selectAll.checked;
+    if (checkbox.checked) {
+      state.selected[selectAll.dataset.selectAll]?.add(checkbox.value);
+    } else {
+      state.selected[selectAll.dataset.selectAll]?.delete(checkbox.value);
+    }
   });
 });
 
@@ -918,6 +1056,13 @@ document.getElementById("stopKernelButton")?.addEventListener("click", async () 
   } catch (error) {
     alert(error.message);
   }
+});
+
+document.getElementById("copyShareLinkButton")?.addEventListener("click", async () => {
+  const link = document.getElementById("shareLinkText")?.value || "";
+  if (!link) return;
+  await navigator.clipboard?.writeText(link);
+  alert("分享链接已复制");
 });
 
 document.getElementById("restartServiceButton")?.addEventListener("click", async () => {
@@ -1024,6 +1169,44 @@ document.getElementById("inboundForm")?.addEventListener("submit", async (event)
     await refresh();
   } catch (error) {
     alert(error.message);
+  }
+});
+
+document.getElementById("batchInboundForm")?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const protocols = selectedBatchProtocols(form);
+  const output = document.getElementById("batchInboundResult");
+  if (protocols.length === 0) {
+    if (output) output.textContent = "请至少选择一个协议";
+    return;
+  }
+  const data = formToObject(form);
+  if (!data.outbound) {
+    if (output) output.textContent = "请先添加一个出站节点，再批量搭建入站。";
+    return;
+  }
+  const base = {
+    prefix: data.prefix || "NodeTools",
+    listen: data.listen || "0.0.0.0",
+    port: Number(data.start_port || 30000),
+    outbound: data.outbound,
+    realityServer: data.reality_server || "addons.mozilla.org",
+    serverName: data.server_name || "addons.mozilla.org",
+  };
+  const lines = [];
+  try {
+    for (let index = 0; index < protocols.length; index += 1) {
+      const payload = await buildBatchInboundPayload(protocols[index], { ...base, port: base.port + index });
+      await postJSON("/api/proxy/create", payload);
+      lines.push(`${payload.name}: ${payload.protocol} / ${payload.listen}:${payload.port}`);
+      if (output) output.textContent = lines.join("\n");
+    }
+    state.configLoaded = false;
+    await refresh();
+    if (output) output.textContent = `${lines.join("\n")}\n\n批量搭建完成。可在入站列表逐个点击分享查看链接和二维码。`;
+  } catch (error) {
+    if (output) output.textContent = `${lines.join("\n")}\n错误: ${error.message}`;
   }
 });
 
@@ -1139,12 +1322,10 @@ document.addEventListener("click", async (event) => {
 
   const shareInboundButton = event.target.closest("[data-share-inbound]");
   if (shareInboundButton) {
-    const form = document.getElementById("inboundForm");
-    const host = form?.elements.share_host?.value || location.hostname;
+    const host = location.hostname;
     try {
       const result = await postJSON(`/api/inbounds/${encodeURIComponent(shareInboundButton.dataset.shareInbound)}/share`, { host });
-      await navigator.clipboard?.writeText(result.link);
-      alert(`分享链接已生成并复制：\n${result.link}`);
+      await showShareLink(result.name, result.link);
     } catch (error) {
       alert(error.message);
     }
