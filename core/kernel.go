@@ -795,7 +795,7 @@ func splitCSV(value string) []string {
 }
 
 func addSingBoxTransport(target map[string]any, outbound OutboundConfig) {
-	if outbound.Transport == "" {
+	if outbound.Transport == "" || outbound.Transport == "tcp" {
 		return
 	}
 	transport := map[string]any{"type": outbound.Transport}

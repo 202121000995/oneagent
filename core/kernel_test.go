@@ -18,7 +18,7 @@ func TestSingBoxKernelGenerateConfig(t *testing.T) {
 			{Name: "anytls-in", Protocol: "anytls", Port: 2083, Password: "secret", TLS: true, ServerName: "example.com"},
 		},
 		Outbounds: []OutboundConfig{
-			{Name: "remote", Protocol: "vless", Address: "127.0.0.1", Port: 2080, UUID: "bf000d23-0752-40b4-affe-68f7707a9661", TLS: true, ServerName: "example.com"},
+			{Name: "remote", Protocol: "vless", Address: "127.0.0.1", Port: 2080, UUID: "bf000d23-0752-40b4-affe-68f7707a9661", TLS: true, ServerName: "example.com", Transport: "tcp"},
 			{Name: "ss", Protocol: "shadowsocks", Address: "127.0.0.1", Port: 2081, Method: "aes-128-gcm", Password: "secret"},
 			{Name: "socks-auth", Protocol: "socks5", Address: "127.0.0.1", Port: 2082, Username: "user", Password: "pass"},
 		},
@@ -72,6 +72,9 @@ func TestSingBoxKernelGenerateConfig(t *testing.T) {
 	vless := outbounds[1].(map[string]any)
 	if vless["type"] != "vless" || vless["uuid"] == "" {
 		t.Fatalf("expected vless outbound with uuid, got %#v", vless)
+	}
+	if _, ok := vless["transport"]; ok {
+		t.Fatalf("tcp transport should be omitted for sing-box outbound, got %#v", vless)
 	}
 	ss := outbounds[2].(map[string]any)
 	if ss["type"] != "shadowsocks" || ss["method"] != "aes-128-gcm" {
