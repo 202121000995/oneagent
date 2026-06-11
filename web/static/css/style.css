@@ -481,6 +481,7 @@ pre {
 
 .modal form {
   display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
   max-height: calc(100vh - 48px);
 }
 
@@ -503,6 +504,7 @@ pre {
 .modal-body {
   display: grid;
   gap: 14px;
+  min-height: 0;
   overflow: auto;
   padding: 18px;
 }

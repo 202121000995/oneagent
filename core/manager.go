@@ -85,11 +85,12 @@ type NodeTestResult struct {
 }
 
 type SubscriptionUpdateResult struct {
-	Provider string   `json:"provider"`
-	URL      string   `json:"url"`
-	Parsed   int      `json:"parsed"`
-	Imported int      `json:"imported"`
-	Errors   []string `json:"errors,omitempty"`
+	Provider      string   `json:"provider"`
+	URL           string   `json:"url"`
+	Parsed        int      `json:"parsed"`
+	Imported      int      `json:"imported"`
+	ImportedNodes []string `json:"imported_nodes,omitempty"`
+	Errors        []string `json:"errors,omitempty"`
 }
 
 func NewManager(db *sql.DB, configPath string) *Manager {
@@ -563,6 +564,9 @@ func (m *Manager) UpdateSubscriptions() ([]SubscriptionUpdateResult, error) {
 				result.Errors = append(result.Errors, importErr.Error())
 			} else {
 				result.Imported = len(nodes)
+				for _, node := range nodes {
+					result.ImportedNodes = append(result.ImportedNodes, node.Name)
+				}
 			}
 		}
 		results = append(results, result)

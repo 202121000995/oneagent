@@ -122,6 +122,7 @@ const inboundSchemas = {
     ["min_idle_session", "最小空闲会话", "5", "number"],
   ],
   shadowsocks: [
+    ["listen", "监听地址", "0.0.0.0", "select", inboundListenOptions],
     ["method", "加密方法", "", "select", ssMethods],
     ["password", "密码", "", "password"],
   ],
@@ -484,12 +485,104 @@ const renderOutboundOptions = () => {
   }
 };
 
+const formValues = (form) => {
+  const values = {};
+  if (!form) return values;
+  for (const element of Array.from(form.elements)) {
+    if (!element.name || element.name === "enabled") continue;
+    values[element.name] = element.type === "checkbox" ? element.checked : element.value;
+  }
+  return values;
+};
+
+const applyValues = (container, values) => {
+  if (!container) return;
+  for (const element of Array.from(container.querySelectorAll("input, select, textarea"))) {
+    if (!element.name || !(element.name in values)) continue;
+    if (element.type === "checkbox") {
+      element.checked = Boolean(values[element.name]);
+    } else {
+      element.value = values[element.name] ?? "";
+    }
+  }
+};
+
+const usesTLS = (values, defaultOn = false) => values.tls === true || values.tls === "true" || values.tls === "on" || (values.tls === undefined && defaultOn);
+const usesTransportFields = (values) => ["ws", "http", "grpc"].includes(values.transport || "tcp");
+
+const inboundFieldsFor = (protocol, values = {}) => {
+  if (protocol === "vless") {
+    const security = values.security || "none";
+    const fields = [
+      ["listen", "监听地址", "0.0.0.0", "select", inboundListenOptions],
+      ["uuid", "UUID", ""],
+      ["flow", "Flow", "", "select", ["", "xtls-rprx-vision"]],
+      ["security", "安全", "none", "select", ["none", "reality"]],
+    ];
+    if (security === "reality") {
+      fields.push(
+        ["server_name", "可选域名 / SNI", "addons.mozilla.org"],
+        ["private_key", "Reality 私钥", ""],
+        ["short_id", "Short IDs", ""],
+        ["reality_handshake_server", "目标网站", "addons.mozilla.org"],
+        ["reality_handshake_port", "目标端口", "443", "number"],
+      );
+    } else {
+      fields.push(["tls", "TLS", "", "checkbox"]);
+      if (usesTLS(values)) {
+        fields.push(["server_name", "Server Name", "example.com"], ...tlsCertificateFields);
+      }
+    }
+    fields.push(["transport", "传输", "tcp", "select", transportOptions]);
+    if (usesTransportFields(values)) fields.push(["path", "路径 / Service Name", "/"], ["host", "Host", ""]);
+    return fields;
+  }
+  if (protocol === "vmess") {
+    const fields = [
+      ["listen", "监听地址", "0.0.0.0", "select", inboundListenOptions],
+      ["uuid", "UUID", ""],
+      ["alter_id", "Alter ID", "0", "number"],
+      ["tls", "TLS", "", "checkbox"],
+    ];
+    if (usesTLS(values)) fields.push(["server_name", "Server Name", "example.com"], ...tlsCertificateFields);
+    fields.push(["transport", "传输", "tcp", "select", transportOptions]);
+    if (usesTransportFields(values)) fields.push(["path", "路径", "/ws"], ["host", "Host", ""]);
+    return fields;
+  }
+  if (protocol === "trojan") {
+    const fields = [
+      ["listen", "监听地址", "0.0.0.0", "select", inboundListenOptions],
+      ["password", "密码", "", "password"],
+      ["tls", "TLS", "true", "checkbox"],
+    ];
+    if (usesTLS(values, true)) fields.push(["server_name", "Server Name", "example.com"], ...tlsCertificateFields);
+    fields.push(["transport", "传输", "tcp", "select", transportOptions]);
+    if (usesTransportFields(values)) fields.push(["path", "路径", "/"], ["host", "Host", ""]);
+    return fields;
+  }
+  if (protocol === "anytls") {
+    return [
+      ["listen", "监听地址", "0.0.0.0", "select", inboundListenOptions],
+      ["password", "密码", "", "password"],
+      ["server_name", "Server Name", "example.com"],
+      ...tlsCertificateFields,
+      ["idle_session_check", "空闲检查间隔", "30s"],
+      ["idle_session_timeout", "空闲超时", "30s"],
+      ["min_idle_session", "最小空闲会话", "5", "number"],
+    ];
+  }
+  return inboundSchemas[protocol] || inboundSchemas.mixed;
+};
+
 const renderInboundFields = () => {
   const select = document.getElementById("inboundProtocolSelect");
   const container = document.getElementById("inboundDynamicFields");
   if (!select || !container) return;
+  const form = document.getElementById("inboundForm");
+  const values = formValues(form);
   const protocol = select.value || "mixed";
-  container.innerHTML = (inboundSchemas[protocol] || []).map(fieldControl).join("");
+  container.innerHTML = inboundFieldsFor(protocol, values).map((field) => fieldControl(field, values)).join("");
+  applyValues(container, values);
 };
 
 const renderSystem = (kernels, service, environment, ports) => {
@@ -614,13 +707,16 @@ const saveMihomoConfig = async () => {
 
 const renderSubscriptionUpdateResult = (payload) => {
   const output = document.getElementById("subscriptionPreview");
-  const lines = (payload.results || []).flatMap((item) => [
-    `订阅: ${item.provider || item.url}`,
-    `解析: ${item.parsed} / 导入: ${item.imported}`,
-    ...((item.errors || []).map((error) => `错误: ${error}`)),
-  ]);
+  const lines = subscriptionResultLines(payload);
   if (output) output.textContent = lines.join("\n") || "没有可更新的订阅";
 };
+
+const subscriptionResultLines = (payload) => (payload.results || []).flatMap((item) => [
+  `订阅: ${item.provider || item.url}`,
+  `解析: ${item.parsed} / 导入: ${item.imported}`,
+  `节点: ${(item.imported_nodes || []).slice(0, 20).join(", ") || "--"}`,
+  ...((item.errors || []).map((error) => `错误: ${error}`)),
+]);
 
 const showPage = (page) => {
   state.page = page;
@@ -671,9 +767,10 @@ const closeModal = () => {
   document.body.classList.remove("modal-open");
 };
 
-const fieldControl = ([name, label, placeholder, type = "text", options = []]) => {
+const fieldControl = ([name, label, placeholder, type = "text", options = []], values = {}) => {
+  const current = values[name] ?? "";
   if (type === "checkbox") {
-    const checked = placeholder === "true" ? " checked" : "";
+    const checked = current === true || current === "true" || current === "on" || (current === "" && placeholder === "true") ? " checked" : "";
     return `
       <label class="check-label">
         <input name="${name}" type="checkbox"${checked}>
@@ -685,7 +782,7 @@ const fieldControl = ([name, label, placeholder, type = "text", options = []]) =
     return `
       <label>${label}
         <select name="${name}">
-          ${options.map((option) => `<option value="${option}"${option === placeholder ? " selected" : ""}>${option || "无"}</option>`).join("")}
+          ${options.map((option) => `<option value="${option}"${option === (current || placeholder) ? " selected" : ""}>${option || "无"}</option>`).join("")}
         </select>
       </label>
     `;
@@ -693,13 +790,13 @@ const fieldControl = ([name, label, placeholder, type = "text", options = []]) =
   if (type === "textarea") {
     return `
       <label class="full-width">${label}
-        <textarea name="${name}" rows="4" placeholder="${escapeHTML(placeholder)}"></textarea>
+        <textarea name="${name}" rows="4" placeholder="${escapeHTML(placeholder)}">${escapeHTML(current)}</textarea>
       </label>
     `;
   }
   return `
     <label>${label}
-      <input name="${name}" type="${type}" placeholder="${escapeHTML(placeholder)}">
+      <input name="${name}" type="${type}" value="${escapeHTML(current)}" placeholder="${escapeHTML(placeholder)}">
     </label>
   `;
 };
@@ -745,6 +842,9 @@ document.getElementById("modalBackdrop")?.addEventListener("click", (event) => {
 
 renderOutboundProtocolOptions();
 document.getElementById("inboundProtocolSelect")?.addEventListener("change", renderInboundFields);
+document.getElementById("inboundDynamicFields")?.addEventListener("change", (event) => {
+  if (["security", "tls", "transport"].includes(event.target.name)) renderInboundFields();
+});
 document.getElementById("outboundProtocolSelect")?.addEventListener("change", renderOutboundFields);
 renderInboundFields();
 renderOutboundFields();
@@ -867,11 +967,7 @@ document.getElementById("updateSubscriptionsButton")?.addEventListener("click", 
   if (result) result.textContent = "更新订阅中...";
   try {
     const payload = await postJSON("/api/subscriptions/update", {});
-    const lines = (payload.results || []).flatMap((item) => [
-      `订阅: ${item.provider || item.url}`,
-      `解析: ${item.parsed} / 导入: ${item.imported}`,
-      ...((item.errors || []).map((error) => `错误: ${error}`)),
-    ]);
+    const lines = subscriptionResultLines(payload);
     if (result) result.textContent = lines.join("\n") || "没有可更新的订阅";
     state.configLoaded = false;
     await refresh();
@@ -976,6 +1072,9 @@ document.getElementById("saveAndUpdateSubscriptionButton")?.addEventListener("cl
     const payload = await postJSON("/api/subscriptions/update", {});
     renderSubscriptionUpdateResult(payload);
     await refresh();
+    showPage("outbounds");
+    const result = document.getElementById("importResult");
+    if (result) result.textContent = subscriptionResultLines(payload).join("\n") || "没有可更新的订阅";
   } catch (error) {
     if (output) output.textContent = error.message;
   }
