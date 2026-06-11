@@ -284,9 +284,7 @@ func (m *Manager) UpdateKernelConfig(cfg KernelConfig) error {
 	if cfg.Type == "" {
 		cfg.Type = "placeholder"
 	}
-	if cfg.ConfigPath == "" {
-		cfg.ConfigPath = "kernel.generated.json"
-	}
+	cfg = normalizeKernelConfig(cfg)
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -302,6 +300,32 @@ func (m *Manager) UpdateKernelConfig(cfg KernelConfig) error {
 	}
 	m.cfg.Kernel = cfg
 	return m.commitLocked()
+}
+
+func normalizeKernelConfig(cfg KernelConfig) KernelConfig {
+	if cfg.Type == "" {
+		cfg.Type = "placeholder"
+	}
+	if cfg.ConfigPath == "" {
+		cfg.ConfigPath = "kernel.generated.json"
+	}
+	switch cfg.Type {
+	case "sing-box":
+		if cfg.Executable == "" || cfg.Executable == "/usr/local/bin/mihomo" {
+			cfg.Executable = "/usr/local/bin/sing-box"
+		}
+		if cfg.ConfigPath == "" || cfg.ConfigPath == "kernel.generated.json" || cfg.ConfigPath == "mihomo.generated.yaml" {
+			cfg.ConfigPath = "sing-box.generated.json"
+		}
+	case "mihomo":
+		if cfg.Executable == "" || cfg.Executable == "/usr/local/bin/sing-box" {
+			cfg.Executable = "/usr/local/bin/mihomo"
+		}
+		if cfg.ConfigPath == "" || cfg.ConfigPath == "kernel.generated.json" || cfg.ConfigPath == "sing-box.generated.json" {
+			cfg.ConfigPath = "mihomo.generated.yaml"
+		}
+	}
+	return cfg
 }
 
 func (m *Manager) UpdateMihomoConfig(cfg MihomoConfig) error {

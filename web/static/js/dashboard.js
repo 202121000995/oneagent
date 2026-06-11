@@ -288,6 +288,16 @@ const randomPassword = (length = 18) => {
   return Array.from(data, (item) => alphabet[item % alphabet.length]).join("");
 };
 
+const randomUUID = () => {
+  if (crypto.randomUUID) return crypto.randomUUID();
+  const data = new Uint8Array(16);
+  crypto.getRandomValues(data);
+  data[6] = (data[6] & 0x0f) | 0x40;
+  data[8] = (data[8] & 0x3f) | 0x80;
+  const hex = Array.from(data, (item) => item.toString(16).padStart(2, "0"));
+  return `${hex.slice(0, 4).join("")}-${hex.slice(4, 6).join("")}-${hex.slice(6, 8).join("")}-${hex.slice(8, 10).join("")}-${hex.slice(10).join("")}`;
+};
+
 const postJSON = async (url, body) => {
   const response = await fetch(url, {
     method: "POST",
@@ -489,9 +499,11 @@ const renderOutboundOptions = () => {
   const select = document.getElementById("inboundOutboundSelect");
   const outbounds = getOutbounds();
   if (select) {
+    const current = select.value;
     select.innerHTML = outbounds.length
       ? outbounds.map((node) => `<option value="${escapeHTML(node.name)}">${escapeHTML(node.name)} / ${escapeHTML(node.protocol)}</option>`).join("")
       : `<option value="">请先添加出站节点</option>`;
+    if (current && outbounds.some((node) => node.name === current)) select.value = current;
   }
   const defaultSelect = document.getElementById("defaultOutboundSelect");
   if (defaultSelect) {
@@ -503,9 +515,11 @@ const renderOutboundOptions = () => {
   }
   const batchSelect = document.getElementById("batchInboundOutboundSelect");
   if (batchSelect) {
+    const current = batchSelect.value;
     batchSelect.innerHTML = outbounds.length
       ? outbounds.map((node) => `<option value="${escapeHTML(node.name)}">${escapeHTML(node.name)} / ${escapeHTML(node.protocol)}</option>`).join("")
       : `<option value="">请先添加出站节点</option>`;
+    if (current && outbounds.some((node) => node.name === current)) batchSelect.value = current;
   }
 };
 
@@ -873,7 +887,7 @@ const buildBatchInboundPayload = async (protocol, base) => {
       ...common,
       name: `${base.prefix}-VLESS-Reality`,
       protocol: "vless",
-      uuid: crypto.randomUUID(),
+      uuid: randomUUID(),
       flow: "xtls-rprx-vision",
       security: "reality",
       tls: true,
@@ -1130,7 +1144,7 @@ document.getElementById("generateRealityKeyButton")?.addEventListener("click", a
       renderInboundFields();
     }
     const keyPair = await postJSON("/api/reality/keypair", {});
-    const uuid = crypto.randomUUID ? crypto.randomUUID() : "00000000-0000-4000-8000-000000000000";
+    const uuid = randomUUID();
     const shortIds = ["", randomHex(4), randomHex(6), randomHex(8)].join(",");
     if (form?.elements.uuid) form.elements.uuid.value = uuid;
     if (form?.elements.flow) form.elements.flow.value = "xtls-rprx-vision";
@@ -1222,6 +1236,23 @@ document.getElementById("outboundForm")?.addEventListener("submit", async (event
   } catch (error) {
     alert(error.message);
   }
+});
+
+const applyKernelDefaults = (form) => {
+  if (!form) return;
+  const type = form.elements.type?.value || "placeholder";
+  const defaults = {
+    "sing-box": ["/usr/local/bin/sing-box", "sing-box.generated.json"],
+    mihomo: ["/usr/local/bin/mihomo", "mihomo.generated.yaml"],
+    placeholder: ["", "kernel.generated.json"],
+  };
+  const [executable, configPath] = defaults[type] || defaults.placeholder;
+  if (form.elements.executable) form.elements.executable.value = executable;
+  if (form.elements.config_path) form.elements.config_path.value = configPath;
+};
+
+document.getElementById("kernelForm")?.elements.type?.addEventListener("change", (event) => {
+  applyKernelDefaults(event.currentTarget.form);
 });
 
 document.getElementById("kernelForm")?.addEventListener("submit", async (event) => {

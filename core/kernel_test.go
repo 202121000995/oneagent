@@ -127,3 +127,23 @@ func TestMihomoKernelGenerateConfig(t *testing.T) {
 		t.Fatalf("expected Auto proxy group, got %#v", groups[0])
 	}
 }
+
+func TestNormalizeKernelConfigSwitchesDefaults(t *testing.T) {
+	cfg := normalizeKernelConfig(KernelConfig{
+		Type:       "mihomo",
+		Executable: "/usr/local/bin/sing-box",
+		ConfigPath: "sing-box.generated.json",
+	})
+	if cfg.Executable != "/usr/local/bin/mihomo" || cfg.ConfigPath != "mihomo.generated.yaml" {
+		t.Fatalf("expected mihomo defaults, got %#v", cfg)
+	}
+
+	cfg = normalizeKernelConfig(KernelConfig{
+		Type:       "sing-box",
+		Executable: "/usr/local/bin/mihomo",
+		ConfigPath: "mihomo.generated.yaml",
+	})
+	if cfg.Executable != "/usr/local/bin/sing-box" || cfg.ConfigPath != "sing-box.generated.json" {
+		t.Fatalf("expected sing-box defaults, got %#v", cfg)
+	}
+}
