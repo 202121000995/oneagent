@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>NodeTools Agent</title>
-  <link rel="stylesheet" href="/static/css/style.css?v=20260612-5">
+  <link rel="stylesheet" href="/static/css/style.css?v=20260612-6">
 </head>
 <body>
   <div class="app-shell">
@@ -17,9 +17,12 @@
         <button type="button" class="active" data-page-target="overview">系统状态</button>
         <button type="button" data-page-target="inbounds">入站列表</button>
         <button type="button" data-page-target="outbounds">出站节点</button>
-        <button type="button" data-page-target="system">部署状态</button>
-        <button type="button" data-page-target="settings">面板设置</button>
+        <button type="button" data-page-target="routing">路由策略</button>
+        <button type="button" data-page-target="kernel">内核管理</button>
+        <button type="button" data-page-target="subscriptions">订阅管理</button>
+        <button type="button" data-page-target="system">系统服务</button>
         <button type="button" data-page-target="logs">运行日志</button>
+        <button type="button" data-page-target="security">安全设置</button>
       </nav>
     </aside>
 
@@ -179,7 +182,14 @@
       <section class="page-view" data-page="system">
         <section class="panel system-panel">
           <div class="panel-header">
-            <h2>部署状态</h2>
+            <div>
+              <h2>系统服务</h2>
+              <span>查看 systemd、VPS 环境和端口监听，并执行服务级操作</span>
+            </div>
+            <div class="panel-actions">
+              <button type="button" class="ghost-button" id="restartServiceButton">重启 Agent 服务</button>
+              <button type="button" class="ghost-button" id="refreshSystemButton">刷新系统信息</button>
+            </div>
             <span id="systemUpdated">--</span>
           </div>
           <div class="system-grid">
@@ -208,6 +218,29 @@
                 <div><dt>自启</dt><dd id="serviceEnabled">--</dd></div>
               </dl>
             </div>
+            <div>
+              <h3>VPS 环境</h3>
+              <dl class="service-facts">
+                <div><dt>版本</dt><dd id="envVersion">--</dd></div>
+                <div><dt>系统</dt><dd id="envOS">--</dd></div>
+                <div><dt>主机</dt><dd id="envHost">--</dd></div>
+                <div><dt>用户</dt><dd id="envUser">--</dd></div>
+                <div><dt>工具</dt><dd id="envTools">--</dd></div>
+              </dl>
+            </div>
+          </div>
+          <h3>端口监听</h3>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>协议</th>
+                  <th>监听地址</th>
+                  <th>进程</th>
+                </tr>
+              </thead>
+              <tbody id="portRows"></tbody>
+            </table>
           </div>
           <div class="deploy-output">
             <label>安装命令<textarea id="serviceCommands" rows="7" readonly></textarea></label>
@@ -225,12 +258,16 @@
             <label>本机生成离线包<textarea rows="5" readonly>mkdir -p kernels
 # 先把 sing-box 和 mihomo 的 Linux amd64 发布文件放到 kernels/
 DEPLOY_WEB_PORT=39080 GO_BIN=/Users/apple/Library/Go/sdk/go1.26.3/bin/go ARCH=amd64 ./deploy/package-offline.sh</textarea></label>
-            <label>VPS 解压后一条命令<textarea rows="5" readonly>unzip nodetools-agent-offline-linux-amd64.zip && cd nodetools-agent-offline && sudo sh install-offline.sh</textarea></label>
+            <label>VPS 解压后一条命令<textarea rows="6" readonly>unzip nodetools-agent-offline-linux-amd64.zip
+cd nodetools-agent-offline
+sudo sh install-offline.sh
+# 回滚上一版本
+sudo sh /opt/nodetools-agent/current/rollback-offline.sh</textarea></label>
           </div>
         </section>
       </section>
 
-      <section class="page-view" data-page="settings">
+      <section class="page-view" data-page="kernel">
         <section class="settings-grid">
           <form class="panel form-panel" id="kernelForm">
             <h2>内核设置</h2>
@@ -245,9 +282,13 @@ DEPLOY_WEB_PORT=39080 GO_BIN=/Users/apple/Library/Go/sdk/go1.26.3/bin/go ARCH=am
             <label>配置文件<input name="config_path" value="kernel.generated.json"></label>
             <button type="submit">保存内核</button>
           </form>
+        </section>
+      </section>
 
+      <section class="page-view" data-page="subscriptions">
+        <section class="settings-grid">
           <form class="panel form-panel" id="mihomoForm">
-            <h2>Mihomo 设置</h2>
+            <h2>订阅管理</h2>
             <label>订阅名称<input name="provider_name" placeholder="main"></label>
             <label>订阅 URL<input name="provider_url" placeholder="https://example.com/sub.yaml"></label>
             <label>代理组名称<input name="group_name" value="NodeTools"></label>
@@ -266,7 +307,11 @@ DEPLOY_WEB_PORT=39080 GO_BIN=/Users/apple/Library/Go/sdk/go1.26.3/bin/go ARCH=am
             </div>
             <pre class="preview-box" id="subscriptionPreview"></pre>
           </form>
+        </section>
+      </section>
 
+      <section class="page-view" data-page="routing">
+        <section class="settings-grid">
           <form class="panel form-panel" id="routingForm">
             <h2>路由设置</h2>
             <label>默认出站
@@ -279,7 +324,11 @@ DEPLOY_WEB_PORT=39080 GO_BIN=/Users/apple/Library/Go/sdk/go1.26.3/bin/go ARCH=am
             </label>
             <button type="submit">保存路由</button>
           </form>
+        </section>
+      </section>
 
+      <section class="page-view" data-page="security">
+        <section class="settings-grid">
           <form class="panel form-panel" id="passwordForm">
             <h2>修改密码</h2>
             <label>用户名<input name="username" value="admin" autocomplete="username"></label>
@@ -371,6 +420,6 @@ DEPLOY_WEB_PORT=39080 GO_BIN=/Users/apple/Library/Go/sdk/go1.26.3/bin/go ARCH=am
     </section>
   </div>
 
-  <script src="/static/js/dashboard.js?v=20260612-5"></script>
+  <script src="/static/js/dashboard.js?v=20260612-6"></script>
 </body>
 </html>

@@ -6,6 +6,9 @@ ARCH="${ARCH:-amd64}"
 GO_BIN="${GO_BIN:-}"
 OUT_DIR="${OUT_DIR:-dist}"
 PACKAGE_NAME="${PACKAGE_NAME:-nodetools-agent-offline-linux-${ARCH}}"
+APP_VERSION="${APP_VERSION:-0.2.0}"
+BUILD_TIME="${BUILD_TIME:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"
+COMMIT="${COMMIT:-$(git rev-parse --short HEAD 2>/dev/null || echo dev)}"
 KERNEL_SOURCE_DIR="${KERNEL_SOURCE_DIR:-kernels}"
 ALLOW_MISSING_KERNELS="${ALLOW_MISSING_KERNELS:-0}"
 DEPLOY_WEB_PORT="${DEPLOY_WEB_PORT:-39080}"
@@ -69,12 +72,16 @@ BUNDLE_DIR="${TMP_DIR}/nodetools-agent-offline"
 mkdir -p "${BUNDLE_DIR}/deploy" "${BUNDLE_DIR}/web" "${BUNDLE_DIR}/kernels" "${OUT_DIR}"
 
 echo "构建 Linux ${ARCH} 版本 Agent..."
-CGO_ENABLED=0 GOOS=linux GOARCH="${ARCH}" "${GO_BIN}" build -o "${BUNDLE_DIR}/${APP_NAME}" ./cmd
+CGO_ENABLED=0 GOOS=linux GOARCH="${ARCH}" "${GO_BIN}" build \
+  -ldflags "-X nodetoolsagent/core.Version=${APP_VERSION} -X nodetoolsagent/core.BuildTime=${BUILD_TIME} -X nodetoolsagent/core.Commit=${COMMIT}" \
+  -o "${BUNDLE_DIR}/${APP_NAME}" ./cmd
 
 make_deploy_config "${BUNDLE_DIR}/config.yaml"
+printf "%s\n" "${APP_VERSION}" > "${BUNDLE_DIR}/VERSION"
 cp README.md "${BUNDLE_DIR}/README.md"
 cp -R web/. "${BUNDLE_DIR}/web/"
 cp deploy/install-offline.sh "${BUNDLE_DIR}/install-offline.sh"
+cp deploy/rollback-offline.sh "${BUNDLE_DIR}/rollback-offline.sh"
 cp deploy/nodetools-agent.service "${BUNDLE_DIR}/deploy/nodetools-agent.service"
 
 copy_kernel() {
@@ -203,5 +210,6 @@ fi
 cp "${TMP_DIR}/package.zip" "${OUT_DIR}/${PACKAGE_NAME}.zip"
 echo "离线包已生成：${OUT_DIR}/${PACKAGE_NAME}.zip"
 echo "VPS 上传后执行：unzip ${PACKAGE_NAME}.zip && cd nodetools-agent-offline && sudo sh install-offline.sh"
+echo "版本：${APP_VERSION} (${COMMIT}, ${BUILD_TIME})"
 echo "Web 面板端口：${DEPLOY_WEB_PORT}"
 echo "默认 mixed 入站认证：${DEPLOY_PROXY_USER} / ${DEPLOY_PROXY_PASS}"

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/user"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -31,6 +32,43 @@ type ServiceInfo struct {
 	Unit        string   `json:"unit"`
 	Commands    []string `json:"commands"`
 	Notes       []string `json:"notes"`
+}
+
+type EnvironmentInfo struct {
+	OS             string `json:"os"`
+	Arch           string `json:"arch"`
+	Hostname       string `json:"hostname"`
+	User           string `json:"user"`
+	WorkingDir     string `json:"working_dir"`
+	Release        string `json:"release,omitempty"`
+	Systemd        bool   `json:"systemd"`
+	HasSS          bool   `json:"has_ss"`
+	HasNetstat     bool   `json:"has_netstat"`
+	HasCurl        bool   `json:"has_curl"`
+	HasUnzip       bool   `json:"has_unzip"`
+	InstallDir     string `json:"install_dir"`
+	ServiceName    string `json:"service_name"`
+	AgentVersion   string `json:"agent_version"`
+	AgentBuildTime string `json:"agent_build_time"`
+}
+
+type PortListener struct {
+	Protocol     string `json:"protocol"`
+	LocalAddress string `json:"local_address"`
+	Process      string `json:"process,omitempty"`
+	Raw          string `json:"raw"`
+}
+
+type PortListenerResult struct {
+	Command string         `json:"command"`
+	Ports   []PortListener `json:"ports"`
+	Error   string         `json:"error,omitempty"`
+}
+
+type ServiceActionResult struct {
+	Status  string `json:"status"`
+	Action  string `json:"action"`
+	Message string `json:"message"`
 }
 
 func DetectKernels(cfg Config) []KernelProbe {
@@ -129,7 +167,7 @@ func AgentServiceInfo() ServiceInfo {
 	const serviceName = "nodetools-agent.service"
 	servicePath := "/etc/systemd/system/" + serviceName
 	workDir := "/opt/nodetools-agent"
-	execPath := filepath.Join(workDir, "nodetools-agent")
+	execPath := filepath.Join(workDir, "current", "nodetools-agent")
 	unit := agentServiceUnit(workDir, execPath)
 
 	info := ServiceInfo{
@@ -152,6 +190,7 @@ func AgentServiceInfo() ServiceInfo {
 			"推荐先在本机生成带 sing-box / mihomo 的离线 zip，再上传到 VPS 解压安装。",
 			"默认缺少内核时 package-offline.sh 会停止，避免生成半成品离线包。",
 			"install-offline.sh 会安装 systemd 服务、检查本机端口，并提示云安全组放行。",
+			"升级安装会保留 database、logs 和现有 config.yaml，并在 backups/ 下备份配置。",
 		},
 	}
 	if info.Systemd {
@@ -159,6 +198,87 @@ func AgentServiceInfo() ServiceInfo {
 		info.Enabled = systemctlValue("is-enabled", "nodetools-agent")
 	}
 	return info
+}
+
+func DetectEnvironment() EnvironmentInfo {
+	hostname, _ := os.Hostname()
+	workingDir, _ := os.Getwd()
+	currentUser := ""
+	if u, err := user.Current(); err == nil {
+		currentUser = u.Username
+	}
+	return EnvironmentInfo{
+		OS:             runtime.GOOS,
+		Arch:           runtime.GOARCH,
+		Hostname:       hostname,
+		User:           currentUser,
+		WorkingDir:     workingDir,
+		Release:        linuxRelease(),
+		Systemd:        hasSystemctl(),
+		HasSS:          commandExists("ss"),
+		HasNetstat:     commandExists("netstat"),
+		HasCurl:        commandExists("curl"),
+		HasUnzip:       commandExists("unzip"),
+		InstallDir:     "/opt/nodetools-agent",
+		ServiceName:    "nodetools-agent.service",
+		AgentVersion:   Version,
+		AgentBuildTime: BuildTime,
+	}
+}
+
+func ListListeningPorts() PortListenerResult {
+	commands := [][]string{
+		{"ss", "-lntup"},
+		{"netstat", "-lntup"},
+		{"lsof", "-nP", "-iTCP", "-sTCP:LISTEN"},
+	}
+	for _, command := range commands {
+		if !commandExists(command[0]) {
+			continue
+		}
+		output, err := runShortCommand(command[0], command[1:]...)
+		result := PortListenerResult{Command: strings.Join(command, " ")}
+		if strings.TrimSpace(output) != "" {
+			result.Ports = parsePortListeners(command[0], output)
+		}
+		if err != nil {
+			result.Error = firstLine(output)
+			if result.Error == "" {
+				result.Error = err.Error()
+			}
+		}
+		return result
+	}
+	return PortListenerResult{Error: "未找到 ss、netstat 或 lsof，无法读取监听端口"}
+}
+
+func RunServiceAction(action string) (ServiceActionResult, error) {
+	if !hasSystemctl() {
+		return ServiceActionResult{Action: action, Status: "unsupported", Message: "当前系统没有 systemctl"}, fmt.Errorf("systemctl is unavailable")
+	}
+	switch action {
+	case "restart":
+		go func() {
+			time.Sleep(300 * time.Millisecond)
+			output, err := exec.Command("systemctl", "restart", "nodetools-agent").CombinedOutput()
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "restart nodetools-agent failed: %v: %s\n", err, strings.TrimSpace(string(output)))
+			}
+		}()
+		return ServiceActionResult{Action: action, Status: "accepted", Message: "已提交重启 Agent 服务"}, nil
+	case "daemon-reload":
+		output, err := runShortCommand("systemctl", "daemon-reload")
+		if err != nil {
+			message := strings.TrimSpace(output)
+			if message == "" {
+				message = err.Error()
+			}
+			return ServiceActionResult{Action: action, Status: "failed", Message: message}, err
+		}
+		return ServiceActionResult{Action: action, Status: "ok", Message: "systemd 配置已重载"}, nil
+	default:
+		return ServiceActionResult{Action: action, Status: "invalid", Message: "不支持的服务动作"}, fmt.Errorf("unsupported service action %q", action)
+	}
 }
 
 func agentServiceUnit(workDir, execPath string) string {
@@ -184,8 +304,7 @@ func hasSystemctl() bool {
 	if runtime.GOOS != "linux" {
 		return false
 	}
-	_, err := exec.LookPath("systemctl")
-	return err == nil
+	return commandExists("systemctl")
 }
 
 func fileExists(path string) bool {
@@ -202,4 +321,61 @@ func systemctlValue(args ...string) string {
 		return "unknown"
 	}
 	return firstLine(output)
+}
+
+func commandExists(name string) bool {
+	_, err := exec.LookPath(name)
+	return err == nil
+}
+
+func linuxRelease() string {
+	data, err := os.ReadFile("/etc/os-release")
+	if err != nil {
+		return ""
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.HasPrefix(line, "PRETTY_NAME=") {
+			return strings.Trim(strings.TrimPrefix(line, "PRETTY_NAME="), `"`)
+		}
+	}
+	return ""
+}
+
+func parsePortListeners(command, output string) []PortListener {
+	var ports []PortListener
+	for _, line := range strings.Split(output, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(strings.ToLower(line), "netid") || strings.HasPrefix(strings.ToLower(line), "proto") || strings.HasPrefix(strings.ToLower(line), "command") {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) == 0 {
+			continue
+		}
+		listener := PortListener{Protocol: fields[0], Raw: line}
+		switch command {
+		case "ss":
+			if len(fields) >= 5 {
+				listener.LocalAddress = fields[4]
+			}
+			if len(fields) >= 7 {
+				listener.Process = strings.Join(fields[6:], " ")
+			}
+		case "netstat":
+			if len(fields) >= 4 {
+				listener.LocalAddress = fields[3]
+			}
+			if len(fields) >= 7 {
+				listener.Process = fields[6]
+			}
+		case "lsof":
+			if len(fields) >= 9 {
+				listener.Protocol = fields[7]
+				listener.LocalAddress = fields[8]
+				listener.Process = fields[0]
+			}
+		}
+		ports = append(ports, listener)
+	}
+	return ports
 }

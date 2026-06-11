@@ -116,6 +116,20 @@ func RegisterAPI(mux *http.ServeMux, manager *Manager, auth *Auth) {
 	mux.Handle("GET /api/system/service", auth.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, AgentServiceInfo())
 	})))
+	mux.Handle("GET /api/system/environment", auth.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, DetectEnvironment())
+	})))
+	mux.Handle("GET /api/system/ports", auth.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, ListListeningPorts())
+	})))
+	mux.Handle("POST /api/system/service/restart", auth.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		result, err := RunServiceAction("restart")
+		if err != nil {
+			writeError(w, http.StatusBadRequest, result.Message)
+			return
+		}
+		writeJSON(w, http.StatusAccepted, result)
+	})))
 	mux.Handle("POST /api/reality/keypair", auth.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		keyPair, err := GenerateRealityKeyPair()
 		if err != nil {

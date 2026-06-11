@@ -11,7 +11,7 @@ func TestSingBoxKernelGenerateConfig(t *testing.T) {
 	kernel := NewSingBoxKernel()
 	state := RuntimeState{
 		Inbounds: []InboundConfig{
-			{Name: "local", Protocol: "socks", Port: 1080},
+			{Name: "local", Protocol: "socks", Listen: "127.0.0.1", Port: 1080},
 			{Name: "vless-in", Protocol: "vless", Port: 2080, UUID: "bf000d23-0752-40b4-affe-68f7707a9661", Flow: "xtls-rprx-vision"},
 			{Name: "socks-in", Protocol: "socks5", Port: 2081, Username: "in-user", Password: "in-pass"},
 			{Name: "reality-in", Protocol: "vless", Port: 2082, UUID: "bf000d23-0752-40b4-affe-68f7707a9661", Security: "reality", ServerName: "addons.mozilla.org", PrivateKey: "private", ShortID: "abcd", RealityHandshakeServer: "addons.mozilla.org", RealityHandshakePort: 443},
@@ -22,7 +22,7 @@ func TestSingBoxKernelGenerateConfig(t *testing.T) {
 			{Name: "ss", Protocol: "shadowsocks", Address: "127.0.0.1", Port: 2081, Method: "aes-128-gcm", Password: "secret"},
 			{Name: "socks-auth", Protocol: "socks5", Address: "127.0.0.1", Port: 2082, Username: "user", Password: "pass"},
 		},
-		Routing: RoutingConfig{Rules: []RoutingRule{{Inbound: "local", Outbound: "remote"}}},
+		Routing: RoutingConfig{DefaultOutbound: "ss", Rules: []RoutingRule{{Inbound: "local", Outbound: "remote"}}},
 	}
 
 	data, err := kernel.GenerateConfig(state)
@@ -37,6 +37,9 @@ func TestSingBoxKernelGenerateConfig(t *testing.T) {
 	inbounds := cfg["inbounds"].([]any)
 	if inbounds[0].(map[string]any)["type"] != "socks" {
 		t.Fatalf("expected socks inbound, got %#v", inbounds[0])
+	}
+	if inbounds[0].(map[string]any)["listen"] != "127.0.0.1" {
+		t.Fatalf("expected listen override, got %#v", inbounds[0])
 	}
 	vlessInbound := inbounds[1].(map[string]any)
 	if vlessInbound["type"] != "vless" {
@@ -72,6 +75,10 @@ func TestSingBoxKernelGenerateConfig(t *testing.T) {
 	socks := outbounds[3].(map[string]any)
 	if socks["type"] != "socks" || socks["username"] != "user" || socks["password"] != "pass" {
 		t.Fatalf("expected authenticated socks outbound, got %#v", socks)
+	}
+	route := cfg["route"].(map[string]any)
+	if route["final"] != "ss" {
+		t.Fatalf("expected default outbound final ss, got %#v", route)
 	}
 }
 

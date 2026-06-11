@@ -2,9 +2,12 @@ const pageTitles = {
   overview: "系统状态",
   inbounds: "入站列表",
   outbounds: "出站节点",
-  system: "部署状态",
-  settings: "面板设置",
+  routing: "路由策略",
+  kernel: "内核管理",
+  subscriptions: "订阅管理",
+  system: "系统服务",
   logs: "运行日志",
+  security: "安全设置",
 };
 
 const state = {
@@ -306,14 +309,16 @@ const getInbounds = () => state.nodes.filter((node) => node.type === "inbound");
 const getInboundConfig = (name) => (state.config?.inbounds || []).find((item) => item.name === name);
 
 async function refresh() {
-  const [statusRes, nodeRes, configRes, kernelsRes, serviceRes] = await Promise.all([
+  const [statusRes, nodeRes, configRes, kernelsRes, serviceRes, envRes, portsRes] = await Promise.all([
     fetch("/api/status"),
     fetch("/api/nodes"),
     fetch("/api/config"),
     fetch("/api/system/kernels"),
     fetch("/api/system/service"),
+    fetch("/api/system/environment"),
+    fetch("/api/system/ports"),
   ]);
-  if ([statusRes, nodeRes, configRes, kernelsRes, serviceRes].some((res) => res.status === 401)) {
+  if ([statusRes, nodeRes, configRes, kernelsRes, serviceRes, envRes, portsRes].some((res) => res.status === 401)) {
     location.href = "/login";
     return;
   }
@@ -324,11 +329,13 @@ async function refresh() {
   state.config = await configRes.json();
   const { kernels } = await kernelsRes.json();
   const service = await serviceRes.json();
+  const environment = await envRes.json();
+  const ports = await portsRes.json();
 
   renderMetrics();
   renderInbounds();
   renderOutbounds();
-  renderSystem(kernels, service);
+  renderSystem(kernels, service, environment, ports);
   renderOutboundOptions();
 
   if (!state.configLoaded) {
@@ -355,6 +362,7 @@ const renderMetrics = () => {
   setText("uptimeText", `${status.uptime_seconds || 0} 秒`);
   setText("kernelStatus", `${status.kernel?.name || "--"} / ${status.kernel?.running ? "运行中" : "未运行"}${pidText}`);
   setText("overviewKernel", `${status.kernel?.name || "--"} ${status.kernel?.running ? "运行中" : "未运行"}`);
+  setText("envVersion", `${status.version || "--"} / ${status.commit || "dev"}`);
   setText("overviewUpdated", new Date().toLocaleTimeString());
   setText("lastUpdated", new Date().toLocaleTimeString());
 };
@@ -466,7 +474,7 @@ const renderInboundFields = () => {
   container.innerHTML = (inboundSchemas[protocol] || []).map(fieldControl).join("");
 };
 
-const renderSystem = (kernels, service) => {
+const renderSystem = (kernels, service, environment, ports) => {
   const rows = document.getElementById("kernelProbeRows");
   if (rows) {
     rows.innerHTML = (kernels || []).map((kernel) => `
@@ -482,6 +490,27 @@ const renderSystem = (kernels, service) => {
   setText("serviceInstalled", service.installed ? "已安装" : "未安装");
   setText("serviceActive", service.active || "--");
   setText("serviceEnabled", service.enabled || "--");
+  setText("envVersion", `${environment.agent_version || state.status.version || "--"} / ${state.status.commit || environment.agent_build_time || "dev"}`);
+  setText("envOS", `${environment.release || environment.os || "--"} ${environment.arch || ""}`.trim());
+  setText("envHost", environment.hostname || "--");
+  setText("envUser", environment.user || "--");
+  setText("envTools", [
+    environment.systemd ? "systemd" : "",
+    environment.has_ss ? "ss" : "",
+    environment.has_netstat ? "netstat" : "",
+    environment.has_curl ? "curl" : "",
+    environment.has_unzip ? "unzip" : "",
+  ].filter(Boolean).join(" / ") || "--");
+  const portRows = document.getElementById("portRows");
+  if (portRows) {
+    portRows.innerHTML = (ports.ports || []).map((port) => `
+      <tr title="${escapeHTML(port.raw || "")}">
+        <td>${escapeHTML(port.protocol || "--")}</td>
+        <td>${escapeHTML(port.local_address || "--")}</td>
+        <td>${escapeHTML(port.process || "--")}</td>
+      </tr>
+    `).join("") || `<tr><td colspan="3" class="empty-cell">${escapeHTML(ports.error || "没有读取到监听端口")}</td></tr>`;
+  }
   setText("systemUpdated", new Date().toLocaleTimeString());
   const commands = document.getElementById("serviceCommands");
   if (commands) commands.value = (service.commands || []).join("\n");
@@ -630,6 +659,7 @@ document.getElementById("outboundSearch")?.addEventListener("input", renderOutbo
 document.getElementById("logSearch")?.addEventListener("input", refreshLogs);
 document.getElementById("logLines")?.addEventListener("change", refreshLogs);
 document.getElementById("refreshLogsButton")?.addEventListener("click", refreshLogs);
+document.getElementById("refreshSystemButton")?.addEventListener("click", refresh);
 
 document.getElementById("openInboundModalButton")?.addEventListener("click", () => {
   const form = document.getElementById("inboundForm");
@@ -717,6 +747,17 @@ document.getElementById("stopKernelButton")?.addEventListener("click", async () 
   try {
     await postJSON("/api/kernel/stop", {});
     await refresh();
+  } catch (error) {
+    alert(error.message);
+  }
+});
+
+document.getElementById("restartServiceButton")?.addEventListener("click", async () => {
+  if (!confirm("确定要重启 Agent 服务吗？面板会短暂断开。")) return;
+  try {
+    await postJSON("/api/system/service/restart", {});
+    alert("已提交重启，几秒后页面会自动刷新。");
+    setTimeout(refresh, 4000);
   } catch (error) {
     alert(error.message);
   }

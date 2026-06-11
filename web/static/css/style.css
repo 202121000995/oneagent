@@ -303,7 +303,7 @@ th {
 
 .system-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1.3fr) minmax(260px, 0.7fr);
+  grid-template-columns: minmax(320px, 1.2fr) repeat(2, minmax(240px, 0.8fr));
   gap: 18px;
   padding: 18px;
 }

@@ -33,6 +33,9 @@ type Node struct {
 }
 
 type Status struct {
+	Version          string       `json:"version"`
+	BuildTime        string       `json:"build_time"`
+	Commit           string       `json:"commit"`
 	StartedAt        string       `json:"started_at"`
 	UptimeSeconds    int64        `json:"uptime_seconds"`
 	InboundCount     int          `json:"inbound_count"`
@@ -241,6 +244,9 @@ func (m *Manager) Status() Status {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return Status{
+		Version:          Version,
+		BuildTime:        BuildTime,
+		Commit:           Commit,
 		StartedAt:        m.startedAt.Format(time.RFC3339),
 		UptimeSeconds:    int64(time.Since(m.startedAt).Seconds()),
 		InboundCount:     len(m.inbounds),

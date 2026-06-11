@@ -6,6 +6,12 @@ INSTALL_DIR="${INSTALL_DIR:-/opt/nodetools-agent}"
 SERVICE_PATH="/etc/systemd/system/${APP_NAME}.service"
 OPEN_FIREWALL="${OPEN_FIREWALL:-1}"
 KEEP_CONFIG="${KEEP_CONFIG:-0}"
+PACKAGE_VERSION="$(cat ./VERSION 2>/dev/null || date +%Y%m%d%H%M%S)"
+RELEASE_ID="${PACKAGE_VERSION}-$(date +%Y%m%d%H%M%S)"
+RELEASES_DIR="${INSTALL_DIR}/releases"
+RELEASE_DIR="${RELEASES_DIR}/${RELEASE_ID}"
+BACKUP_DIR="${INSTALL_DIR}/backups"
+CURRENT_LINK="${INSTALL_DIR}/current"
 
 if [ "$(id -u)" -ne 0 ]; then
   echo "请用 root 运行：sudo sh install-offline.sh"
@@ -26,9 +32,10 @@ if systemctl list-unit-files "${APP_NAME}.service" >/dev/null 2>&1; then
   systemctl stop "${APP_NAME}" >/dev/null 2>&1 || true
 fi
 
-mkdir -p "${INSTALL_DIR}/database" "${INSTALL_DIR}/logs" "${INSTALL_DIR}/web" "${INSTALL_DIR}/deploy"
-cp "./${APP_NAME}" "${INSTALL_DIR}/${APP_NAME}"
-chmod 0755 "${INSTALL_DIR}/${APP_NAME}"
+mkdir -p "${INSTALL_DIR}/database" "${INSTALL_DIR}/logs" "${RELEASE_DIR}/web" "${RELEASE_DIR}/deploy" "${BACKUP_DIR}"
+cp "./${APP_NAME}" "${RELEASE_DIR}/${APP_NAME}"
+chmod 0755 "${RELEASE_DIR}/${APP_NAME}"
+printf "%s\n" "${PACKAGE_VERSION}" > "${RELEASE_DIR}/VERSION"
 
 package_web_port() {
   if [ -f "./config.yaml" ]; then
@@ -64,7 +71,7 @@ if [ -f "./config.yaml" ] && [ ! -f "${INSTALL_DIR}/config.yaml" ]; then
 elif [ -f "./config.yaml" ]; then
   cp "./config.yaml" "${INSTALL_DIR}/config.yaml.example"
   if [ "${KEEP_CONFIG}" != "1" ]; then
-    backup_path="${INSTALL_DIR}/config.yaml.bak.$(date +%Y%m%d%H%M%S)"
+    backup_path="${BACKUP_DIR}/config.yaml.$(date +%Y%m%d%H%M%S)"
     cp "${INSTALL_DIR}/config.yaml" "${backup_path}"
     update_config_port "${INSTALL_DIR}/config.yaml" "${WEB_PORT}"
     echo "已保留现有配置并更新 web_port=${WEB_PORT}，备份：${backup_path}"
@@ -75,10 +82,24 @@ if [ -f "${INSTALL_DIR}/config.yaml" ] && [ "${KEEP_CONFIG}" != "1" ]; then
   update_config_port "${INSTALL_DIR}/config.yaml" "${WEB_PORT}"
 fi
 
-cp -R "./web/." "${INSTALL_DIR}/web/"
+cp -R "./web/." "${RELEASE_DIR}/web/"
 if [ -d "./deploy" ]; then
-  cp -R "./deploy/." "${INSTALL_DIR}/deploy/"
+  cp -R "./deploy/." "${RELEASE_DIR}/deploy/"
 fi
+if [ -f "./rollback-offline.sh" ]; then
+  cp "./rollback-offline.sh" "${RELEASE_DIR}/rollback-offline.sh"
+fi
+
+if [ -d "${INSTALL_DIR}/web" ] && [ ! -L "${INSTALL_DIR}/web" ]; then
+  mv "${INSTALL_DIR}/web" "${BACKUP_DIR}/web.$(date +%Y%m%d%H%M%S)"
+fi
+if [ -d "${INSTALL_DIR}/deploy" ] && [ ! -L "${INSTALL_DIR}/deploy" ]; then
+  mv "${INSTALL_DIR}/deploy" "${BACKUP_DIR}/deploy.$(date +%Y%m%d%H%M%S)"
+fi
+
+ln -sfn "${RELEASE_DIR}" "${CURRENT_LINK}"
+ln -sfn "${CURRENT_LINK}/web" "${INSTALL_DIR}/web"
+ln -sfn "${CURRENT_LINK}/deploy" "${INSTALL_DIR}/deploy"
 
 install_kernel() {
   name="$1"
@@ -104,7 +125,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 WorkingDirectory=${INSTALL_DIR}
-ExecStart=${INSTALL_DIR}/${APP_NAME}
+ExecStart=${CURRENT_LINK}/${APP_NAME}
 Restart=on-failure
 RestartSec=3
 LimitNOFILE=1048576
@@ -154,7 +175,20 @@ check_http() {
   return 0
 }
 
-if ! check_http "${WEB_PORT}"; then
+wait_http() {
+  port="$1"
+  tries=20
+  while [ "${tries}" -gt 0 ]; do
+    if check_http "${port}"; then
+      return 0
+    fi
+    tries=$((tries - 1))
+    sleep 1
+  done
+  return 1
+}
+
+if ! wait_http "${WEB_PORT}"; then
   echo "服务已启动，但本机访问 http://127.0.0.1:${WEB_PORT}/login 失败。最近日志如下："
   journalctl -u "${APP_NAME}" -n 80 --no-pager || true
   exit 1
@@ -170,4 +204,6 @@ elif command -v netstat >/dev/null 2>&1; then
 fi
 
 echo "安装完成：访问 http://服务器IP:${WEB_PORT}"
+echo "当前版本：${PACKAGE_VERSION}"
+echo "如需回滚：sudo sh ${CURRENT_LINK}/rollback-offline.sh"
 echo "如果外网仍打不开，请在 VPS 云厂商安全组/防火墙放行 TCP ${WEB_PORT}。"
