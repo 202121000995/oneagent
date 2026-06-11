@@ -22,6 +22,10 @@ if ! command -v systemctl >/dev/null 2>&1; then
   exit 1
 fi
 
+if systemctl list-unit-files "${APP_NAME}.service" >/dev/null 2>&1; then
+  systemctl stop "${APP_NAME}" >/dev/null 2>&1 || true
+fi
+
 mkdir -p "${INSTALL_DIR}/database" "${INSTALL_DIR}/logs" "${INSTALL_DIR}/web" "${INSTALL_DIR}/deploy"
 cp "./${APP_NAME}" "${INSTALL_DIR}/${APP_NAME}"
 chmod 0755 "${INSTALL_DIR}/${APP_NAME}"

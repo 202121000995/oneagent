@@ -11,6 +11,7 @@ import (
 type ProxyCreateRequest struct {
 	Name                   string `json:"name"`
 	Protocol               string `json:"protocol"`
+	Listen                 string `json:"listen,omitempty"`
 	Port                   int    `json:"port"`
 	Outbound               string `json:"outbound"`
 	Username               string `json:"username,omitempty"`

@@ -44,22 +44,27 @@ const transportOptions = ["tcp", "ws", "http", "grpc"];
 
 const inboundSchemas = {
   mixed: [
+    ["listen", "监听地址", "127.0.0.1", "select", ["127.0.0.1", "::", "0.0.0.0"]],
     ["username", "用户名", ""],
     ["password", "密码", "", "password"],
   ],
   socks: [
+    ["listen", "监听地址", "127.0.0.1", "select", ["127.0.0.1", "::", "0.0.0.0"]],
     ["username", "用户名", ""],
     ["password", "密码", "", "password"],
   ],
   socks5: [
+    ["listen", "监听地址", "127.0.0.1", "select", ["127.0.0.1", "::", "0.0.0.0"]],
     ["username", "用户名", ""],
     ["password", "密码", "", "password"],
   ],
   http: [
+    ["listen", "监听地址", "127.0.0.1", "select", ["127.0.0.1", "::", "0.0.0.0"]],
     ["username", "用户名", ""],
     ["password", "密码", "", "password"],
   ],
   vless: [
+    ["listen", "监听地址", "0.0.0.0", "select", ["0.0.0.0", "::", "127.0.0.1"]],
     ["uuid", "UUID", ""],
     ["flow", "Flow", "", "select", ["", "xtls-rprx-vision"]],
     ["security", "安全", "none", "select", ["none", "reality"]],
@@ -91,6 +96,7 @@ const inboundSchemas = {
     ["host", "Host", ""],
   ],
   anytls: [
+    ["listen", "监听地址", "0.0.0.0", "select", ["0.0.0.0", "::", "127.0.0.1"]],
     ["password", "密码", "", "password"],
     ["tls", "TLS", "true", "checkbox"],
     ["server_name", "Server Name", "example.com"],
@@ -368,7 +374,7 @@ const renderInbounds = () => {
       <tr>
         <td>${escapeHTML(node.name)}</td>
         <td>${escapeHTML(node.protocol)}</td>
-        <td>${node.port}</td>
+        <td>${escapeHTML(node.address || "::")}:${node.port}</td>
         <td>${escapeHTML(rule?.outbound || "未选择")}</td>
         <td>${formatBytes(node.upload_bytes)}</td>
         <td>${formatBytes(node.download_bytes)}</td>

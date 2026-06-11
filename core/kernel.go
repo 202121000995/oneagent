@@ -428,7 +428,7 @@ func (k *MihomoKernel) Status() KernelStatus {
 func singBoxInbounds(inbounds []InboundConfig) []map[string]any {
 	items := make([]map[string]any, 0, len(inbounds))
 	for _, inbound := range inbounds {
-		base := map[string]any{"tag": inbound.Name, "listen": "::", "listen_port": inbound.Port}
+		base := map[string]any{"tag": inbound.Name, "listen": firstNonEmpty(inbound.Listen, "::"), "listen_port": inbound.Port}
 		switch inbound.Protocol {
 		case "mixed":
 			base["type"] = "mixed"

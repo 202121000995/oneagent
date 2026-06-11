@@ -27,6 +27,7 @@ type Config struct {
 type InboundConfig struct {
 	Name                   string `yaml:"name" json:"name"`
 	Protocol               string `yaml:"protocol" json:"protocol"`
+	Listen                 string `yaml:"listen,omitempty" json:"listen,omitempty"`
 	Port                   int    `yaml:"port" json:"port"`
 	Outbound               string `yaml:"-" json:"outbound,omitempty"`
 	Disabled               bool   `yaml:"disabled,omitempty" json:"disabled,omitempty"`

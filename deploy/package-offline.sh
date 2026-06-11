@@ -9,6 +9,8 @@ PACKAGE_NAME="${PACKAGE_NAME:-nodetools-agent-offline-linux-${ARCH}}"
 KERNEL_SOURCE_DIR="${KERNEL_SOURCE_DIR:-kernels}"
 ALLOW_MISSING_KERNELS="${ALLOW_MISSING_KERNELS:-0}"
 DEPLOY_WEB_PORT="${DEPLOY_WEB_PORT:-39080}"
+DEPLOY_PROXY_USER="${DEPLOY_PROXY_USER:-nodetools}"
+DEPLOY_PROXY_PASS="${DEPLOY_PROXY_PASS:-}"
 
 if [ -z "${GO_BIN}" ]; then
   if command -v go >/dev/null 2>&1; then
@@ -26,6 +28,10 @@ if ! command -v zip >/dev/null 2>&1; then
   exit 1
 fi
 
+if [ -z "${DEPLOY_PROXY_PASS}" ]; then
+  DEPLOY_PROXY_PASS="$(LC_ALL=C tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 18)"
+fi
+
 make_deploy_config() {
   path="$1"
   cat > "${path}" <<EOF
@@ -40,7 +46,10 @@ kernel:
 inbounds:
   - name: Local-Mixed
     protocol: mixed
+    listen: 127.0.0.1
     port: 1080
+    username: ${DEPLOY_PROXY_USER}
+    password: ${DEPLOY_PROXY_PASS}
 outbounds:
   - name: Direct
     protocol: direct
@@ -195,3 +204,4 @@ cp "${TMP_DIR}/package.zip" "${OUT_DIR}/${PACKAGE_NAME}.zip"
 echo "离线包已生成：${OUT_DIR}/${PACKAGE_NAME}.zip"
 echo "VPS 上传后执行：unzip ${PACKAGE_NAME}.zip && cd nodetools-agent-offline && sudo sh install-offline.sh"
 echo "Web 面板端口：${DEPLOY_WEB_PORT}"
+echo "默认 mixed 入站认证：${DEPLOY_PROXY_USER} / ${DEPLOY_PROXY_PASS}"

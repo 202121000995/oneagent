@@ -237,6 +237,12 @@ kernels/mihomo-linux-amd64-v1.19.27.gz
 DEPLOY_WEB_PORT=39080 GO_BIN=/Users/apple/Library/Go/sdk/go1.26.3/bin/go ARCH=amd64 ./deploy/package-offline.sh
 ```
 
+默认 `Local-Mixed:1080` 会生成账号密码，避免 VPS 无防火墙时变成开放代理。也可以手动指定：
+
+```bash
+DEPLOY_PROXY_USER=nodetools DEPLOY_PROXY_PASS=强密码 DEPLOY_WEB_PORT=39080 GO_BIN=/Users/apple/Library/Go/sdk/go1.26.3/bin/go ARCH=amd64 ./deploy/package-offline.sh
+```
+
 输出文件：
 
 ```bash

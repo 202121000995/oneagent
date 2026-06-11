@@ -192,6 +192,7 @@ func (m *Manager) ListNodes() []Node {
 			Name:          inbound.Name,
 			Type:          "inbound",
 			Protocol:      inbound.Protocol,
+			Address:       firstNonEmpty(inbound.Listen, "::"),
 			Port:          inbound.Port,
 			Enabled:       !inbound.Disabled,
 			Status:        health.Status,
@@ -328,6 +329,7 @@ func (m *Manager) CreateProxy(req ProxyCreateRequest) (Node, error) {
 	inbound := InboundConfig{
 		Name:                   req.Name,
 		Protocol:               req.Protocol,
+		Listen:                 req.Listen,
 		Port:                   req.Port,
 		Username:               req.Username,
 		UUID:                   req.UUID,
@@ -1028,6 +1030,7 @@ func (m *Manager) nodeLocked(name string, nodeType string) Node {
 			Name:          inbound.Name,
 			Type:          "inbound",
 			Protocol:      inbound.Protocol,
+			Address:       firstNonEmpty(inbound.Listen, "::"),
 			Port:          inbound.Port,
 			Enabled:       !inbound.Disabled,
 			Status:        m.health[name].Status,
