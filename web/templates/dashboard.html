@@ -1,0 +1,376 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>NodeTools Agent</title>
+  <link rel="stylesheet" href="/static/css/style.css?v=20260612-4">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <span>NodeTools</span>
+        <strong>Agent V1</strong>
+      </div>
+      <nav class="side-nav" aria-label="主导航">
+        <button type="button" class="active" data-page-target="overview">系统状态</button>
+        <button type="button" data-page-target="inbounds">入站列表</button>
+        <button type="button" data-page-target="outbounds">出站节点</button>
+        <button type="button" data-page-target="system">部署状态</button>
+        <button type="button" data-page-target="settings">面板设置</button>
+        <button type="button" data-page-target="logs">运行日志</button>
+      </nav>
+    </aside>
+
+    <main class="content-shell">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">节点运行面板</p>
+          <h1 id="pageTitle">系统状态</h1>
+        </div>
+        <div class="top-actions">
+          <div class="status-pill" id="kernelStatus">加载中</div>
+          <button class="ghost-button" id="reloadKernelButton" type="button">重载内核</button>
+          <button class="ghost-button" id="stopKernelButton" type="button">停止内核</button>
+          <button class="ghost-button" id="logoutButton" type="button">退出</button>
+        </div>
+      </header>
+
+      <section class="page-view active" data-page="overview">
+        <section class="metrics">
+          <article>
+            <span>入站</span>
+            <strong id="inboundCount">0</strong>
+          </article>
+          <article>
+            <span>出站</span>
+            <strong id="outboundCount">0</strong>
+          </article>
+          <article>
+            <span>上传</span>
+            <strong id="uploadTotal">0 B</strong>
+          </article>
+          <article>
+            <span>下载</span>
+            <strong id="downloadTotal">0 B</strong>
+          </article>
+        </section>
+
+        <section class="panel">
+          <div class="panel-header">
+            <h2>运行概览</h2>
+            <span id="overviewUpdated">--</span>
+          </div>
+          <div class="summary-grid">
+            <article>
+              <span>内核</span>
+              <strong id="overviewKernel">--</strong>
+            </article>
+            <article>
+              <span>路由规则</span>
+              <strong id="routingRuleCount">0</strong>
+            </article>
+            <article>
+              <span>运行时间</span>
+              <strong id="uptimeText">0 秒</strong>
+            </article>
+          </div>
+        </section>
+      </section>
+
+      <section class="page-view" data-page="inbounds">
+        <section class="panel">
+          <div class="panel-header">
+            <div>
+              <h2>入站列表</h2>
+              <span>创建本地监听端口，让系统或其他程序连进来，再选择一个出站节点转发</span>
+            </div>
+            <div class="panel-actions">
+              <button type="button" class="ghost-button" data-batch-action="test" data-batch-scope="inbound">批量测速</button>
+              <button type="button" class="ghost-button" data-batch-action="disable" data-batch-scope="inbound">批量停用</button>
+              <button type="button" id="openInboundModalButton">添加入站</button>
+            </div>
+          </div>
+          <div class="table-tools">
+            <input id="inboundSearch" placeholder="搜索入站名称或协议">
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>名称</th>
+                  <th>协议</th>
+                  <th>监听端口</th>
+                  <th>使用出站</th>
+                  <th>上传</th>
+                  <th>下载</th>
+                  <th>延迟</th>
+                  <th>状态</th>
+                  <th>操作</th>
+                  <th><input type="checkbox" data-select-all="inbound"></th>
+                </tr>
+              </thead>
+              <tbody id="inboundRows"></tbody>
+            </table>
+          </div>
+        </section>
+      </section>
+
+      <section class="page-view" data-page="outbounds">
+        <section class="panel import-panel" id="importPanel">
+          <div class="panel-header">
+            <div>
+              <h2>导入出站节点</h2>
+              <span>粘贴分享链接、订阅正文、Clash/Mihomo YAML、sing-box JSON 或 v2rayN/X-UI 节点</span>
+            </div>
+            <div class="panel-actions">
+              <button type="button" class="ghost-button" id="updateSubscriptionsButton">更新订阅</button>
+              <button type="button" id="openOutboundModalButton">手动添加出站</button>
+            </div>
+          </div>
+          <div class="import-body">
+            <label>节点内容<textarea id="importLinksText" rows="7" placeholder="每行一个链接，也可以直接粘贴 base64、YAML 或 JSON"></textarea></label>
+            <div class="button-row compact">
+              <button type="button" id="importOutboundsButton">解析并导入</button>
+              <button type="button" class="ghost-button" id="clearImportButton">清空</button>
+            </div>
+            <pre class="preview-box" id="importResult"></pre>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-header">
+            <div>
+              <h2>出站节点</h2>
+              <span>这里保存的是要连接的远端代理节点，入站创建时从这里选择</span>
+            </div>
+            <div class="panel-actions">
+              <button type="button" class="ghost-button" data-batch-action="test" data-batch-scope="outbound">批量测速</button>
+              <button type="button" class="ghost-button" data-batch-action="disable" data-batch-scope="outbound">批量停用</button>
+              <span id="lastUpdated">--</span>
+            </div>
+          </div>
+          <div class="table-tools">
+            <input id="outboundSearch" placeholder="搜索出站名称、协议或地址">
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>名称</th>
+                  <th>协议</th>
+                  <th>地址</th>
+                  <th>端口</th>
+                  <th>上传</th>
+                  <th>下载</th>
+                  <th>延迟</th>
+                  <th>状态</th>
+                  <th>操作</th>
+                  <th><input type="checkbox" data-select-all="outbound"></th>
+                </tr>
+              </thead>
+              <tbody id="outboundRows"></tbody>
+            </table>
+          </div>
+        </section>
+      </section>
+
+      <section class="page-view" data-page="system">
+        <section class="panel system-panel">
+          <div class="panel-header">
+            <h2>部署状态</h2>
+            <span id="systemUpdated">--</span>
+          </div>
+          <div class="system-grid">
+            <div>
+              <h3>内核检测</h3>
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>内核</th>
+                      <th>状态</th>
+                      <th>路径</th>
+                      <th>版本</th>
+                    </tr>
+                  </thead>
+                  <tbody id="kernelProbeRows"></tbody>
+                </table>
+              </div>
+            </div>
+            <div>
+              <h3>Agent 服务</h3>
+              <dl class="service-facts">
+                <div><dt>systemd</dt><dd id="serviceSystemd">--</dd></div>
+                <div><dt>安装</dt><dd id="serviceInstalled">--</dd></div>
+                <div><dt>运行</dt><dd id="serviceActive">--</dd></div>
+                <div><dt>自启</dt><dd id="serviceEnabled">--</dd></div>
+              </dl>
+            </div>
+          </div>
+          <div class="deploy-output">
+            <label>安装命令<textarea id="serviceCommands" rows="7" readonly></textarea></label>
+            <label>systemd 服务文件<textarea id="serviceUnit" rows="12" readonly></textarea></label>
+          </div>
+        </section>
+        <section class="panel">
+          <div class="panel-header">
+            <div>
+              <h2>离线部署</h2>
+              <span>先在本机打包，再上传到 VPS 安装；VPS 不需要访问 GitHub</span>
+            </div>
+          </div>
+          <div class="deploy-output">
+            <label>本机生成离线包<textarea rows="5" readonly>mkdir -p kernels
+# 先把 sing-box 和 mihomo 的 Linux amd64 发布文件放到 kernels/
+DEPLOY_WEB_PORT=39080 GO_BIN=/Users/apple/Library/Go/sdk/go1.26.3/bin/go ARCH=amd64 ./deploy/package-offline.sh</textarea></label>
+            <label>VPS 解压后一条命令<textarea rows="5" readonly>unzip nodetools-agent-offline-linux-amd64.zip && cd nodetools-agent-offline && sudo sh install-offline.sh</textarea></label>
+          </div>
+        </section>
+      </section>
+
+      <section class="page-view" data-page="settings">
+        <section class="settings-grid">
+          <form class="panel form-panel" id="kernelForm">
+            <h2>内核设置</h2>
+            <label>类型
+              <select name="type">
+                <option value="placeholder">placeholder</option>
+                <option value="sing-box">sing-box</option>
+                <option value="mihomo">mihomo</option>
+              </select>
+            </label>
+            <label>可执行文件<input name="executable" placeholder="/usr/local/bin/sing-box"></label>
+            <label>配置文件<input name="config_path" value="kernel.generated.json"></label>
+            <button type="submit">保存内核</button>
+          </form>
+
+          <form class="panel form-panel" id="mihomoForm">
+            <h2>Mihomo 设置</h2>
+            <label>订阅名称<input name="provider_name" placeholder="main"></label>
+            <label>订阅 URL<input name="provider_url" placeholder="https://example.com/sub.yaml"></label>
+            <label>代理组名称<input name="group_name" value="NodeTools"></label>
+            <label>代理组类型
+              <select name="group_type">
+                <option value="select">select</option>
+                <option value="url-test">url-test</option>
+                <option value="fallback">fallback</option>
+                <option value="load-balance">load-balance</option>
+              </select>
+            </label>
+            <label>规则<textarea name="rules" rows="4">MATCH,NodeTools</textarea></label>
+            <div class="button-row compact">
+              <button type="button" class="ghost-button" id="previewSubscriptionButton">预览订阅</button>
+              <button type="submit">保存 Mihomo</button>
+            </div>
+            <pre class="preview-box" id="subscriptionPreview"></pre>
+          </form>
+
+          <form class="panel form-panel" id="routingForm">
+            <h2>路由设置</h2>
+            <label>默认出站
+              <select name="default_outbound" id="defaultOutboundSelect">
+                <option value="direct">direct</option>
+              </select>
+            </label>
+            <label>规则
+              <textarea name="rules" rows="8" placeholder="每行：优先级,入站名称,出站名称,启用&#10;10,Local-Mixed,HK,true"></textarea>
+            </label>
+            <button type="submit">保存路由</button>
+          </form>
+
+          <form class="panel form-panel" id="passwordForm">
+            <h2>修改密码</h2>
+            <label>用户名<input name="username" value="admin" autocomplete="username"></label>
+            <label>当前密码<input name="current_password" type="password" autocomplete="current-password"></label>
+            <label>新密码<input name="new_password" type="password" autocomplete="new-password"></label>
+            <button type="submit">保存密码</button>
+          </form>
+        </section>
+      </section>
+
+      <section class="page-view" data-page="logs">
+        <section class="panel log-panel">
+          <div class="panel-header">
+            <h2>运行日志</h2>
+            <span id="logUpdated">--</span>
+          </div>
+          <div class="table-tools log-tools">
+            <input id="logSearch" placeholder="过滤日志关键字">
+            <select id="logLines">
+              <option value="200">最近 200 行</option>
+              <option value="500">最近 500 行</option>
+              <option value="1000">最近 1000 行</option>
+            </select>
+            <button type="button" class="ghost-button" id="refreshLogsButton">刷新日志</button>
+          </div>
+          <pre id="logOutput"></pre>
+        </section>
+      </section>
+    </main>
+  </div>
+
+  <div class="modal-backdrop" id="modalBackdrop" hidden>
+    <section class="modal" id="inboundModal" role="dialog" aria-modal="true" aria-labelledby="inboundModalTitle" hidden>
+      <form id="inboundForm">
+        <input type="hidden" name="original_name">
+        <div class="modal-header">
+          <h2 id="inboundModalTitle">添加入站</h2>
+          <button type="button" class="close-button" data-close-modal>关闭</button>
+        </div>
+        <div class="modal-body two-column">
+          <label>备注<input name="name" placeholder="Local-SOCKS"></label>
+          <label>启用
+            <select name="enabled" disabled>
+              <option value="true">启用</option>
+            </select>
+          </label>
+          <label>协议
+            <select name="protocol" id="inboundProtocolSelect">
+              <option value="mixed">mixed</option>
+              <option value="socks">socks</option>
+              <option value="socks5">socks5</option>
+              <option value="http">http</option>
+              <option value="vless">vless</option>
+              <option value="anytls">anytls</option>
+            </select>
+          </label>
+          <label>监听端口<input name="port" type="number" min="1" max="65535" placeholder="1080"></label>
+          <div class="dynamic-fields full-width" id="inboundDynamicFields"></div>
+          <label class="full-width">选择出站
+            <select name="outbound" id="inboundOutboundSelect"></select>
+          </label>
+          <label class="full-width">分享链接主机名/IP<input name="share_host" placeholder="你的服务器 IP 或域名，导出分享链接时使用"></label>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="ghost-button" id="generateRealityKeyButton">生成 Reality 密钥</button>
+          <button type="button" class="ghost-button" data-close-modal>取消</button>
+          <button type="submit">添加入站</button>
+        </div>
+      </form>
+    </section>
+
+    <section class="modal wide-modal" id="outboundModal" role="dialog" aria-modal="true" aria-labelledby="outboundModalTitle" hidden>
+      <form id="outboundForm">
+        <div class="modal-header">
+          <h2 id="outboundModalTitle">手动添加出站</h2>
+          <button type="button" class="close-button" data-close-modal>关闭</button>
+        </div>
+        <div class="modal-body">
+          <label>协议
+            <select name="protocol" id="outboundProtocolSelect"></select>
+          </label>
+          <div class="dynamic-fields" id="outboundDynamicFields"></div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="ghost-button" data-close-modal>取消</button>
+          <button type="submit">保存出站</button>
+        </div>
+      </form>
+    </section>
+  </div>
+
+  <script src="/static/js/dashboard.js?v=20260612-4"></script>
+</body>
+</html>

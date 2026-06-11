@@ -1,0 +1,14 @@
+dist/
+database/*.db
+database/*.db-*
+logs/*.log
+kernel.generated.json
+sing-box.generated.json
+mihomo.generated.yaml
+certs/
+kernels/*.gz
+kernels/*.tar.gz
+kernels/*.tgz
+nodetools-agent
+*.test
+.DS_Store

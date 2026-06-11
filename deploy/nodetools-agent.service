@@ -1,0 +1,15 @@
+[Unit]
+Description=NodeTools Agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/nodetools-agent
+ExecStart=/opt/nodetools-agent/nodetools-agent
+Restart=on-failure
+RestartSec=3
+LimitNOFILE=1048576
+
+[Install]
+WantedBy=multi-user.target

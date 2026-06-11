@@ -1,0 +1,26 @@
+server:
+    web_port: 8080
+    admin_user: admin
+    admin_pass: ""
+kernel:
+    type: placeholder
+    executable: ""
+    config_path: kernel.generated.json
+inbounds:
+    - name: HK-VLESS
+      protocol: vless
+      port: 443
+      uuid: bf000d23-0752-40b4-affe-68f7707a9661
+outbounds:
+    - name: HK
+      protocol: vless
+      address: hk.node.example.com
+      port: 443
+      uuid: bf000d23-0752-40b4-affe-68f7707a9661
+      network: tcp
+      tls: true
+      server_name: hk.node.example.com
+routing:
+    rules:
+        - inbound: HK-VLESS
+          outbound: HK
