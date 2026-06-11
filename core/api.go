@@ -25,6 +25,8 @@ type ProxyCreateRequest struct {
 	ServerName             string `json:"server_name,omitempty"`
 	CertificatePath        string `json:"certificate_path,omitempty"`
 	KeyPath                string `json:"key_path,omitempty"`
+	CertificateContent     string `json:"certificate_content,omitempty"`
+	KeyContent             string `json:"key_content,omitempty"`
 	Transport              string `json:"transport,omitempty"`
 	Path                   string `json:"path,omitempty"`
 	Host                   string `json:"host,omitempty"`

@@ -42,6 +42,8 @@ type InboundConfig struct {
 	ServerName             string `yaml:"server_name,omitempty" json:"server_name,omitempty"`
 	CertificatePath        string `yaml:"certificate_path,omitempty" json:"certificate_path,omitempty"`
 	KeyPath                string `yaml:"key_path,omitempty" json:"key_path,omitempty"`
+	CertificateContent     string `yaml:"-" json:"certificate_content,omitempty"`
+	KeyContent             string `yaml:"-" json:"key_content,omitempty"`
 	Transport              string `yaml:"transport,omitempty" json:"transport,omitempty"`
 	Path                   string `yaml:"path,omitempty" json:"path,omitempty"`
 	Host                   string `yaml:"host,omitempty" json:"host,omitempty"`

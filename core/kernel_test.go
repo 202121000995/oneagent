@@ -59,6 +59,11 @@ func TestSingBoxKernelGenerateConfig(t *testing.T) {
 	if realityInbound["type"] != "vless" || realityTLS["reality"] == nil {
 		t.Fatalf("expected vless reality inbound, got %#v", realityInbound)
 	}
+	reality := realityTLS["reality"].(map[string]any)
+	shortIDs := reality["short_id"].([]any)
+	if len(shortIDs) != 1 || shortIDs[0] != "abcd" {
+		t.Fatalf("expected reality short_id array, got %#v", shortIDs)
+	}
 	anyTLSInbound := inbounds[4].(map[string]any)
 	if anyTLSInbound["type"] != "anytls" || anyTLSInbound["tls"] == nil {
 		t.Fatalf("expected anytls inbound with tls, got %#v", anyTLSInbound)

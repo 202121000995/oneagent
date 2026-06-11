@@ -16,6 +16,37 @@ import (
 	"time"
 )
 
+func materializeInboundCertificateContent(inbound *InboundConfig) error {
+	if strings.TrimSpace(inbound.CertificateContent) == "" && strings.TrimSpace(inbound.KeyContent) == "" {
+		return nil
+	}
+	if strings.TrimSpace(inbound.CertificateContent) == "" || strings.TrimSpace(inbound.KeyContent) == "" {
+		return fmt.Errorf("certificate content and key content must be provided together")
+	}
+	if !strings.Contains(inbound.CertificateContent, "BEGIN CERTIFICATE") {
+		return fmt.Errorf("certificate content must be PEM certificate")
+	}
+	if !strings.Contains(inbound.KeyContent, "PRIVATE KEY") {
+		return fmt.Errorf("key content must be PEM private key")
+	}
+	certPath, keyPath := pastedCertPaths(inbound.Name)
+	if err := os.MkdirAll(filepath.Dir(certPath), 0o755); err != nil {
+		return err
+	}
+	if err := os.WriteFile(certPath, []byte(strings.TrimSpace(inbound.CertificateContent)+"\n"), 0o644); err != nil {
+		return err
+	}
+	if err := os.WriteFile(keyPath, []byte(strings.TrimSpace(inbound.KeyContent)+"\n"), 0o600); err != nil {
+		return err
+	}
+	inbound.CertificatePath = certPath
+	inbound.KeyPath = keyPath
+	inbound.CertificateContent = ""
+	inbound.KeyContent = ""
+	inbound.TLS = true
+	return nil
+}
+
 func ensureInboundTLSAssets(inbounds []InboundConfig) ([]InboundConfig, error) {
 	next := append([]InboundConfig(nil), inbounds...)
 	for i := range next {
@@ -47,6 +78,11 @@ func needsGeneratedCertificate(inbound InboundConfig) bool {
 func generatedCertPaths(name string) (string, string) {
 	base := sanitizeFileName(name)
 	return filepath.Join("certs", base+".crt"), filepath.Join("certs", base+".key")
+}
+
+func pastedCertPaths(name string) (string, string) {
+	base := sanitizeFileName(name)
+	return filepath.Join("certs", base+".pasted.crt"), filepath.Join("certs", base+".pasted.key")
 }
 
 func ensureSelfSignedCertificate(certPath, keyPath, serverName string) error {

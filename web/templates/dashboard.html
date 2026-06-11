@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>NodeTools Agent</title>
-  <link rel="stylesheet" href="/static/css/style.css?v=20260612-6">
+  <link rel="stylesheet" href="/static/css/style.css?v=20260612-7">
 </head>
 <body>
   <div class="app-shell">
@@ -303,7 +303,8 @@ sudo sh /opt/nodetools-agent/current/rollback-offline.sh</textarea></label>
             <label>规则<textarea name="rules" rows="4">MATCH,NodeTools</textarea></label>
             <div class="button-row compact">
               <button type="button" class="ghost-button" id="previewSubscriptionButton">预览订阅</button>
-              <button type="submit">保存 Mihomo</button>
+              <button type="button" class="ghost-button" id="saveAndUpdateSubscriptionButton">保存并拉取节点</button>
+              <button type="submit">保存订阅设置</button>
             </div>
             <pre class="preview-box" id="subscriptionPreview"></pre>
           </form>
@@ -382,6 +383,8 @@ sudo sh /opt/nodetools-agent/current/rollback-offline.sh</textarea></label>
               <option value="socks5">socks5</option>
               <option value="http">http</option>
               <option value="vless">vless</option>
+              <option value="vmess">vmess</option>
+              <option value="trojan">trojan</option>
               <option value="anytls">anytls</option>
             </select>
           </label>
@@ -393,7 +396,7 @@ sudo sh /opt/nodetools-agent/current/rollback-offline.sh</textarea></label>
           <label class="full-width">分享链接主机名/IP<input name="share_host" placeholder="你的服务器 IP 或域名，导出分享链接时使用"></label>
         </div>
         <div class="modal-footer">
-          <button type="button" class="ghost-button" id="generateRealityKeyButton">生成 Reality 密钥</button>
+          <button type="button" class="ghost-button" id="generateRealityKeyButton">一键生成 Reality</button>
           <button type="button" class="ghost-button" data-close-modal>取消</button>
           <button type="submit">添加入站</button>
         </div>
@@ -420,6 +423,6 @@ sudo sh /opt/nodetools-agent/current/rollback-offline.sh</textarea></label>
     </section>
   </div>
 
-  <script src="/static/js/dashboard.js?v=20260612-6"></script>
+  <script src="/static/js/dashboard.js?v=20260612-7"></script>
 </body>
 </html>

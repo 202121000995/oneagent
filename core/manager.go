@@ -348,6 +348,8 @@ func (m *Manager) CreateProxy(req ProxyCreateRequest) (Node, error) {
 		ServerName:             req.ServerName,
 		CertificatePath:        req.CertificatePath,
 		KeyPath:                req.KeyPath,
+		CertificateContent:     req.CertificateContent,
+		KeyContent:             req.KeyContent,
 		Transport:              req.Transport,
 		Path:                   req.Path,
 		Host:                   req.Host,
@@ -358,6 +360,9 @@ func (m *Manager) CreateProxy(req ProxyCreateRequest) (Node, error) {
 		IdleSessionCheck:       req.IdleSessionCheck,
 		IdleSessionTimeout:     req.IdleSessionTimeout,
 		MinIdleSession:         req.MinIdleSession,
+	}
+	if err := materializeInboundCertificateContent(&inbound); err != nil {
+		return Node{}, err
 	}
 	if err := inbound.Validate(); err != nil {
 		return Node{}, err
@@ -432,6 +437,9 @@ func (m *Manager) UpsertInbound(inbound InboundConfig) (Node, error) {
 	}
 	if inbound.Port < 1 || inbound.Port > 65535 {
 		return Node{}, fmt.Errorf("valid port is required")
+	}
+	if err := materializeInboundCertificateContent(&inbound); err != nil {
+		return Node{}, err
 	}
 	if err := inbound.Validate(); err != nil {
 		return Node{}, err

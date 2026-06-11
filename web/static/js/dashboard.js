@@ -44,67 +44,79 @@ const ssMethods = [
 const fingerprints = ["chrome", "firefox", "safari", "ios", "android", "edge", "randomized"];
 const alpnOptions = ["", "h2", "http/1.1", "h2,http/1.1", "h3"];
 const transportOptions = ["tcp", "ws", "http", "grpc"];
+const inboundListenOptions = ["0.0.0.0", "::", "127.0.0.1"];
+const localListenOptions = ["127.0.0.1", "::", "0.0.0.0"];
+const tlsCertificateFields = [
+  ["certificate_path", "TLS 证书路径", ""],
+  ["key_path", "TLS 私钥路径", ""],
+  ["certificate_content", "TLS 证书内容", "", "textarea"],
+  ["key_content", "TLS 私钥内容", "", "textarea"],
+];
 
 const inboundSchemas = {
   mixed: [
-    ["listen", "监听地址", "127.0.0.1", "select", ["127.0.0.1", "::", "0.0.0.0"]],
+    ["listen", "监听地址", "127.0.0.1", "select", localListenOptions],
     ["username", "用户名", ""],
     ["password", "密码", "", "password"],
   ],
   socks: [
-    ["listen", "监听地址", "127.0.0.1", "select", ["127.0.0.1", "::", "0.0.0.0"]],
+    ["listen", "监听地址", "127.0.0.1", "select", localListenOptions],
     ["username", "用户名", ""],
     ["password", "密码", "", "password"],
   ],
   socks5: [
-    ["listen", "监听地址", "127.0.0.1", "select", ["127.0.0.1", "::", "0.0.0.0"]],
+    ["listen", "监听地址", "127.0.0.1", "select", localListenOptions],
     ["username", "用户名", ""],
     ["password", "密码", "", "password"],
   ],
   http: [
-    ["listen", "监听地址", "127.0.0.1", "select", ["127.0.0.1", "::", "0.0.0.0"]],
+    ["listen", "监听地址", "127.0.0.1", "select", localListenOptions],
     ["username", "用户名", ""],
     ["password", "密码", "", "password"],
   ],
   vless: [
-    ["listen", "监听地址", "0.0.0.0", "select", ["0.0.0.0", "::", "127.0.0.1"]],
+    ["listen", "监听地址", "0.0.0.0", "select", inboundListenOptions],
     ["uuid", "UUID", ""],
     ["flow", "Flow", "", "select", ["", "xtls-rprx-vision"]],
     ["security", "安全", "none", "select", ["none", "reality"]],
     ["tls", "TLS", "", "checkbox"],
     ["server_name", "Server Name", "addons.mozilla.org"],
     ["private_key", "Reality Private Key", ""],
-    ["short_id", "Reality Short ID", ""],
+    ["short_id", "Reality Short IDs", ""],
     ["reality_handshake_server", "Reality Handshake Server", "addons.mozilla.org"],
     ["reality_handshake_port", "Reality Handshake Port", "443", "number"],
-    ["certificate_path", "TLS 证书路径", ""],
-    ["key_path", "TLS 私钥路径", ""],
+    ...tlsCertificateFields,
     ["transport", "传输", "tcp", "select", transportOptions],
     ["path", "路径 / Service Name", "/"],
     ["host", "Host", ""],
   ],
   vmess: [
+    ["listen", "监听地址", "0.0.0.0", "select", inboundListenOptions],
     ["uuid", "UUID", ""],
     ["alter_id", "Alter ID", "0", "number"],
+    ["tls", "TLS", "", "checkbox"],
+    ["server_name", "Server Name", "example.com"],
+    ...tlsCertificateFields,
     ["transport", "传输", "tcp", "select", transportOptions],
     ["path", "路径", "/ws"],
     ["host", "Host", ""],
   ],
   trojan: [
+    ["listen", "监听地址", "0.0.0.0", "select", inboundListenOptions],
     ["password", "密码", "", "password"],
-    ["tls", "TLS", "", "checkbox"],
+    ["tls", "TLS", "true", "checkbox"],
     ["server_name", "Server Name", "example.com"],
+    ...tlsCertificateFields,
     ["transport", "传输", "tcp", "select", transportOptions],
     ["path", "路径", "/"],
     ["host", "Host", ""],
   ],
   anytls: [
-    ["listen", "监听地址", "0.0.0.0", "select", ["0.0.0.0", "::", "127.0.0.1"]],
+    ["listen", "监听地址", "0.0.0.0", "select", inboundListenOptions],
     ["password", "密码", "", "password"],
     ["tls", "TLS", "true", "checkbox"],
     ["server_name", "Server Name", "example.com"],
-    ["certificate_path", "TLS 证书路径", ""],
-    ["key_path", "TLS 私钥路径", ""],
+    ...tlsCertificateFields,
     ["idle_session_check", "空闲检查间隔", "30s"],
     ["idle_session_timeout", "空闲超时", "30s"],
     ["min_idle_session", "最小空闲会话", "5", "number"],
@@ -250,6 +262,12 @@ const escapeHTML = (value) => String(value ?? "")
   .replaceAll(">", "&gt;")
   .replaceAll('"', "&quot;")
   .replaceAll("'", "&#039;");
+
+const randomHex = (bytes) => {
+  const data = new Uint8Array(bytes);
+  crypto.getRandomValues(data);
+  return Array.from(data, (item) => item.toString(16).padStart(2, "0")).join("");
+};
 
 const postJSON = async (url, body) => {
   const response = await fetch(url, {
@@ -561,6 +579,49 @@ const parseRoutingRules = (text) => String(text || "")
     };
   });
 
+const mihomoPayloadFromForm = (form) => {
+  const data = formToObject(form);
+  const provider = data.provider_name && data.provider_url ? [{
+    name: data.provider_name,
+    type: "http",
+    url: data.provider_url,
+    interval: 3600,
+    health_check_url: "http://www.gstatic.com/generate_204",
+    health_check_lazy: true,
+  }] : [];
+  const groupName = data.group_name || "NodeTools";
+  return {
+    providers: provider,
+    proxy_groups: [{
+      name: groupName,
+      type: data.group_type || "select",
+      proxies: ["DIRECT"],
+      use: provider.map((item) => item.name),
+    }],
+    rules: String(data.rules || "MATCH," + groupName)
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean),
+  };
+};
+
+const saveMihomoConfig = async () => {
+  const form = document.getElementById("mihomoForm");
+  if (!form) return;
+  await sendJSON("/api/mihomo/config", "PUT", mihomoPayloadFromForm(form));
+  state.configLoaded = false;
+};
+
+const renderSubscriptionUpdateResult = (payload) => {
+  const output = document.getElementById("subscriptionPreview");
+  const lines = (payload.results || []).flatMap((item) => [
+    `订阅: ${item.provider || item.url}`,
+    `解析: ${item.parsed} / 导入: ${item.imported}`,
+    ...((item.errors || []).map((error) => `错误: ${error}`)),
+  ]);
+  if (output) output.textContent = lines.join("\n") || "没有可更新的订阅";
+};
+
 const showPage = (page) => {
   state.page = page;
   document.querySelectorAll("[data-page]").forEach((view) => {
@@ -626,6 +687,13 @@ const fieldControl = ([name, label, placeholder, type = "text", options = []]) =
         <select name="${name}">
           ${options.map((option) => `<option value="${option}"${option === placeholder ? " selected" : ""}>${option || "无"}</option>`).join("")}
         </select>
+      </label>
+    `;
+  }
+  if (type === "textarea") {
+    return `
+      <label class="full-width">${label}
+        <textarea name="${name}" rows="4" placeholder="${escapeHTML(placeholder)}"></textarea>
       </label>
     `;
   }
@@ -815,9 +883,25 @@ document.getElementById("updateSubscriptionsButton")?.addEventListener("click", 
 document.getElementById("generateRealityKeyButton")?.addEventListener("click", async () => {
   const form = document.getElementById("inboundForm");
   try {
+    const protocol = document.getElementById("inboundProtocolSelect");
+    if (protocol) {
+      protocol.value = "vless";
+      renderInboundFields();
+    }
     const keyPair = await postJSON("/api/reality/keypair", {});
+    const uuid = crypto.randomUUID ? crypto.randomUUID() : "00000000-0000-4000-8000-000000000000";
+    const shortIds = ["", randomHex(4), randomHex(6), randomHex(8)].join(",");
+    if (form?.elements.uuid) form.elements.uuid.value = uuid;
+    if (form?.elements.flow) form.elements.flow.value = "xtls-rprx-vision";
+    if (form?.elements.security) form.elements.security.value = "reality";
+    if (form?.elements.tls) form.elements.tls.checked = true;
+    if (form?.elements.server_name) form.elements.server_name.value = "addons.mozilla.org";
     if (form?.elements.private_key) form.elements.private_key.value = keyPair.private_key;
-    alert(`Reality 密钥已生成。\nPublic Key: ${keyPair.public_key}`);
+    if (form?.elements.short_id) form.elements.short_id.value = shortIds;
+    if (form?.elements.reality_handshake_server) form.elements.reality_handshake_server.value = "addons.mozilla.org";
+    if (form?.elements.reality_handshake_port) form.elements.reality_handshake_port.value = 443;
+    await navigator.clipboard?.writeText(keyPair.public_key);
+    alert(`Reality 参数已生成。\nPublic Key 已复制：\n${keyPair.public_key}`);
   } catch (error) {
     alert(error.message);
   }
@@ -874,35 +958,26 @@ document.getElementById("kernelForm")?.addEventListener("submit", async (event) 
 
 document.getElementById("mihomoForm")?.addEventListener("submit", async (event) => {
   event.preventDefault();
-  const data = formToObject(event.currentTarget);
-  const provider = data.provider_name && data.provider_url ? [{
-    name: data.provider_name,
-    type: "http",
-    url: data.provider_url,
-    interval: 3600,
-    health_check_url: "http://www.gstatic.com/generate_204",
-    health_check_lazy: true,
-  }] : [];
-  const groupName = data.group_name || "NodeTools";
-  const payload = {
-    providers: provider,
-    proxy_groups: [{
-      name: groupName,
-      type: data.group_type || "select",
-      proxies: ["DIRECT"],
-      use: provider.map((item) => item.name),
-    }],
-    rules: String(data.rules || "MATCH," + groupName)
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .filter(Boolean),
-  };
   try {
-    await sendJSON("/api/mihomo/config", "PUT", payload);
-    state.configLoaded = false;
+    await saveMihomoConfig();
+    const output = document.getElementById("subscriptionPreview");
+    if (output) output.textContent = "订阅设置已保存。需要导入节点时点击“保存并拉取节点”。";
     await refresh();
   } catch (error) {
     alert(error.message);
+  }
+});
+
+document.getElementById("saveAndUpdateSubscriptionButton")?.addEventListener("click", async () => {
+  const output = document.getElementById("subscriptionPreview");
+  if (output) output.textContent = "保存并拉取节点中...";
+  try {
+    await saveMihomoConfig();
+    const payload = await postJSON("/api/subscriptions/update", {});
+    renderSubscriptionUpdateResult(payload);
+    await refresh();
+  } catch (error) {
+    if (output) output.textContent = error.message;
   }
 });
 

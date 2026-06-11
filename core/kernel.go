@@ -495,7 +495,7 @@ func addSingBoxInboundTLS(target map[string]any, inbound InboundConfig) {
 			"private_key": inbound.PrivateKey,
 		}
 		if inbound.ShortID != "" {
-			reality["short_id"] = []string{inbound.ShortID}
+			reality["short_id"] = splitCSV(inbound.ShortID)
 		}
 		tls["reality"] = reality
 	}
