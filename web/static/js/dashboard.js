@@ -296,6 +296,14 @@ const randomPassword = (length = 18) => {
   return Array.from(data, (item) => alphabet[item % alphabet.length]).join("");
 };
 
+const randomBase64 = (bytes) => {
+  const data = new Uint8Array(bytes);
+  crypto.getRandomValues(data);
+  let binary = "";
+  data.forEach((item) => { binary += String.fromCharCode(item); });
+  return btoa(binary);
+};
+
 const randomUUID = () => {
   if (crypto.randomUUID) return crypto.randomUUID();
   const data = new Uint8Array(16);
@@ -1028,6 +1036,7 @@ const buildBatchInboundPayload = async (protocol, base) => {
       ...common,
       name: `${base.prefix}-ShadowTLS-v3`,
       protocol: "shadowtls",
+      method: "aes-128-gcm",
       password: randomPassword(),
       server_name: base.serverName,
       reality_handshake_server: base.realityServer,
@@ -1039,7 +1048,7 @@ const buildBatchInboundPayload = async (protocol, base) => {
       name: `${base.prefix}-Shadowsocks`,
       protocol: "shadowsocks",
       method: "2022-blake3-aes-128-gcm",
-      password: randomPassword(24),
+      password: randomBase64(16),
     };
   case "trojan":
     return {

@@ -880,15 +880,23 @@ func inboundProbeOutbound(inbound InboundConfig) (OutboundConfig, error) {
 	if outbound.Protocol == "socks5" {
 		outbound.Protocol = "socks"
 	}
+	if outbound.Protocol == "shadowtls" {
+		outbound.Protocol = "shadowsocks"
+		outbound.Method = firstNonEmpty(inbound.Method, "aes-128-gcm")
+		outbound.Transport = "shadowtls"
+		outbound.ObfsPassword = inbound.Password
+		outbound.TLS = inbound.ServerName != ""
+	}
 	if outbound.Protocol == "vless" && inbound.Security == "reality" {
 		publicKey, err := publicKeyFromRealityPrivate(inbound.PrivateKey)
 		if err != nil {
 			return OutboundConfig{}, fmt.Errorf("无法从 Reality 私钥推导 public key: %w", err)
 		}
 		outbound.PublicKey = publicKey
+		outbound.Fingerprint = firstNonEmpty(outbound.Fingerprint, "chrome")
 	}
 	switch outbound.Protocol {
-	case "socks", "http", "vless", "vmess", "trojan", "shadowsocks", "shadowtls", "anytls":
+	case "socks", "http", "vless", "vmess", "trojan", "shadowsocks", "anytls":
 		return outbound, nil
 	default:
 		return OutboundConfig{}, fmt.Errorf("%s 入站暂不支持从入口到 Google 的自动链路测试", inbound.Protocol)

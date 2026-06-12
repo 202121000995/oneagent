@@ -457,6 +457,7 @@ func singBoxInbounds(inbounds []InboundConfig) []map[string]any {
 		case "shadowtls":
 			base["type"] = "shadowtls"
 			base["version"] = 3
+			innerTag := inbound.Name + "-shadowsocks"
 			base["users"] = []map[string]any{{
 				"name":     firstNonEmpty(inbound.Username, inbound.Name),
 				"password": inbound.Password,
@@ -465,6 +466,16 @@ func singBoxInbounds(inbounds []InboundConfig) []map[string]any {
 				"server":      firstNonEmpty(inbound.RealityHandshakeServer, inbound.ServerName),
 				"server_port": firstNonZero(inbound.RealityHandshakePort, 443),
 			}
+			base["detour"] = innerTag
+			items = append(items, base)
+			items = append(items, map[string]any{
+				"type":     "shadowsocks",
+				"tag":      innerTag,
+				"method":   firstNonEmpty(inbound.Method, "aes-128-gcm"),
+				"password": inbound.Password,
+				"network":  "tcp",
+			})
+			continue
 		case "anytls":
 			base["type"] = "anytls"
 			base["users"] = []map[string]any{{"password": inbound.Password}}

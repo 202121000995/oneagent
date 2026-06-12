@@ -85,7 +85,14 @@ func TestSingBoxKernelGenerateConfig(t *testing.T) {
 	if shadowTLSInbound["type"] != "shadowtls" || shadowTLSInbound["version"] != float64(3) {
 		t.Fatalf("expected shadowtls v3 inbound, got %#v", shadowTLSInbound)
 	}
-	forwardInbound := inbounds[6].(map[string]any)
+	if shadowTLSInbound["detour"] != "shadowtls-in-shadowsocks" {
+		t.Fatalf("expected shadowtls detour to inner shadowsocks inbound, got %#v", shadowTLSInbound)
+	}
+	shadowTLSInner := inbounds[6].(map[string]any)
+	if shadowTLSInner["type"] != "shadowsocks" || shadowTLSInner["tag"] != "shadowtls-in-shadowsocks" {
+		t.Fatalf("expected inner shadowsocks inbound for shadowtls, got %#v", shadowTLSInner)
+	}
+	forwardInbound := inbounds[7].(map[string]any)
 	if forwardInbound["type"] != "direct" || forwardInbound["network"] != "udp" || forwardInbound["override_address"] != "1.1.1.1" || forwardInbound["override_port"] != float64(53) {
 		t.Fatalf("expected direct udp forward inbound, got %#v", forwardInbound)
 	}

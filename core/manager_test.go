@@ -122,8 +122,27 @@ func TestInboundProbeOutboundDerivesRealityPublicKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("inboundProbeOutbound returned error: %v", err)
 	}
-	if outbound.PublicKey != pair.PublicKey || outbound.ShortID != "abcd" || outbound.Address != "127.0.0.1" {
+	if outbound.PublicKey != pair.PublicKey || outbound.ShortID != "abcd" || outbound.Address != "127.0.0.1" || outbound.Fingerprint != "chrome" {
 		t.Fatalf("unexpected probe outbound: %#v", outbound)
+	}
+}
+
+func TestInboundProbeOutboundWrapsShadowTLSWithShadowsocks(t *testing.T) {
+	outbound, err := inboundProbeOutbound(InboundConfig{
+		Name:                   "shadowtls-in",
+		Protocol:               "shadowtls",
+		Listen:                 "0.0.0.0",
+		Port:                   8443,
+		Password:               "secret",
+		ServerName:             "addons.mozilla.org",
+		RealityHandshakeServer: "addons.mozilla.org",
+		RealityHandshakePort:   443,
+	})
+	if err != nil {
+		t.Fatalf("inboundProbeOutbound returned error: %v", err)
+	}
+	if outbound.Protocol != "shadowsocks" || outbound.Transport != "shadowtls" || outbound.ObfsPassword != "secret" || outbound.Method != "aes-128-gcm" {
+		t.Fatalf("unexpected shadowtls probe outbound: %#v", outbound)
 	}
 }
 
