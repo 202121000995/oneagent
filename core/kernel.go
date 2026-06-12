@@ -470,11 +470,6 @@ func singBoxInbounds(inbounds []InboundConfig) []map[string]any {
 		case "anytls":
 			base["type"] = "anytls"
 			base["users"] = []map[string]any{{"password": inbound.Password}}
-			addOptional(base, "idle_session_check_interval", inbound.IdleSessionCheck)
-			addOptional(base, "idle_session_timeout", inbound.IdleSessionTimeout)
-			if inbound.MinIdleSession > 0 {
-				base["min_idle_session"] = inbound.MinIdleSession
-			}
 			addSingBoxInboundTLS(base, inbound)
 		case "shadowsocks", "ss":
 			base["type"] = "shadowsocks"

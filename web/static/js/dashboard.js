@@ -121,9 +121,6 @@ const inboundSchemas = {
     ["tls", "TLS", "true", "checkbox"],
     ["server_name", "Server Name", "example.com"],
     ...tlsCertificateFields,
-    ["idle_session_check", "空闲检查间隔", "30s"],
-    ["idle_session_timeout", "空闲超时", "30s"],
-    ["min_idle_session", "最小空闲会话", "5", "number"],
   ],
   shadowsocks: [
     ["listen", "监听地址", "0.0.0.0", "select", inboundListenOptions],
@@ -604,9 +601,6 @@ const inboundFieldsFor = (protocol, values = {}) => {
       ["password", "密码", "", "password"],
       ["server_name", "Server Name", "example.com"],
       ...tlsCertificateFields,
-      ["idle_session_check", "空闲检查间隔", "30s"],
-      ["idle_session_timeout", "空闲超时", "30s"],
-      ["min_idle_session", "最小空闲会话", "5", "number"],
     ];
   }
   return inboundSchemas[protocol] || inboundSchemas.mixed;
@@ -935,9 +929,6 @@ const buildBatchInboundPayload = async (protocol, base) => {
       password: randomPassword(),
       tls: true,
       server_name: base.serverName,
-      idle_session_check: "30s",
-      idle_session_timeout: "30s",
-      min_idle_session: 5,
     };
   default:
     throw new Error(`不支持的批量协议: ${protocol}`);
