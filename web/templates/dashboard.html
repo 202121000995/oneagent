@@ -292,6 +292,27 @@ sudo sh /opt/nodetools-agent/current/rollback-offline.sh</textarea></label>
             <h2>订阅管理</h2>
             <label>订阅名称<input name="provider_name" placeholder="main"></label>
             <label>订阅 URL<input name="provider_url" placeholder="https://example.com/sub.yaml"></label>
+            <label>更新间隔（秒）<input name="provider_interval" type="number" min="60" value="3600"></label>
+            <label>订阅分组<input name="provider_group" placeholder="机场 / 地区 / 用途"></label>
+            <label>节点名前缀<input name="rename_prefix" placeholder="例如 JP-"></label>
+            <label>节点名后缀<input name="rename_suffix" placeholder="例如 -订阅"></label>
+            <label>去重策略
+              <select name="dedup_strategy">
+                <option value="equivalent">按节点参数</option>
+                <option value="name">按节点名称</option>
+                <option value="none">不去重</option>
+              </select>
+            </label>
+            <label>保留手动字段
+              <select name="preserve_user_fields">
+                <option value="true">保留</option>
+                <option value="false">覆盖</option>
+              </select>
+            </label>
+            <label>健康检查 URL<input name="health_check_url" value="http://www.gstatic.com/generate_204"></label>
+            <label>健康检查间隔（秒）<input name="health_check_interval" type="number" min="60" value="300"></label>
+            <label>节点筛选<input name="filter" placeholder="正则，留空不过滤"></label>
+            <label>节点排除<input name="exclude_filter" placeholder="正则，留空不排除"></label>
             <label>代理组名称<input name="group_name" value="NodeTools"></label>
             <label>代理组类型
               <select name="group_type">

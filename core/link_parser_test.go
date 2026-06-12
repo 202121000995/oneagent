@@ -1,6 +1,9 @@
 package core
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestParseOutboundLinksSupportsCommonShareLinks(t *testing.T) {
 	input := `
@@ -108,5 +111,16 @@ func TestParseOutboundLinksSupportsShadowTLSLink(t *testing.T) {
 	}
 	if outbounds[0].Protocol != "shadowtls" || outbounds[0].Password != "secret" {
 		t.Fatalf("unexpected shadowtls outbound: %#v", outbounds[0])
+	}
+}
+
+func TestParseOutboundLinksDetailedReportsItemIndex(t *testing.T) {
+	input := "vless://bad-without-port\nvless://uuid@example.com:443?security=reality&pbk=pub#ok"
+	outbounds, errors := ParseOutboundLinksDetailed(input)
+	if len(outbounds) != 1 {
+		t.Fatalf("expected one parsed outbound, got %#v", outbounds)
+	}
+	if len(errors) != 1 || errors[0].Index != 1 || !strings.Contains(errors[0].Error, "第 1 条解析失败") {
+		t.Fatalf("expected indexed parse error, got %#v", errors)
 	}
 }

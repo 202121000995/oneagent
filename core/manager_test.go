@@ -408,6 +408,69 @@ func TestImportOutboundsReportPreservesManualName(t *testing.T) {
 	}
 }
 
+func TestSubscriptionImportPreservesConfiguredUserFields(t *testing.T) {
+	db, err := InitDatabase(filepath.Join(t.TempDir(), "nodetools.db"))
+	if err != nil {
+		t.Fatalf("InitDatabase returned error: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	manager := NewManager(db, "")
+	cfg := Config{
+		Outbounds: []OutboundConfig{{
+			Name:           "manual-name",
+			Protocol:       "vless",
+			Address:        "45.139.193.187",
+			Port:           8881,
+			UUID:           "cbf378ef-bbf8-4539-a564-31c6f0173142",
+			Security:       "reality",
+			TLS:            true,
+			ServerName:     "manual.example.com",
+			PublicKey:      "pub",
+			Fingerprint:    "firefox",
+			SkipCertVerify: true,
+		}},
+		Routing: RoutingConfig{Mode: "global", DefaultOutbound: "manual-name"},
+	}
+	cfg.Server.WebPort = 8080
+	cfg.Server.AdminUser = "admin"
+	cfg.Server.AdminPass = "password123"
+	if err := manager.ApplyConfig(cfg); err != nil {
+		t.Fatalf("ApplyConfig returned error: %v", err)
+	}
+
+	report, err := manager.ImportOutboundsReportWithOptions([]OutboundConfig{{
+		Name:        "subscription-name",
+		Protocol:    "vless",
+		Address:     "45.139.193.187",
+		Port:        8881,
+		UUID:        "cbf378ef-bbf8-4539-a564-31c6f0173142",
+		Security:    "reality",
+		TLS:         true,
+		ServerName:  "sub.example.com",
+		PublicKey:   "pub",
+		Fingerprint: "chrome",
+	}}, ImportOutboundsOptions{Provider: ProxyProviderConfig{
+		Name:               "sub",
+		Group:              "机场",
+		PreserveUserFields: true,
+	}, FromSubscription: true})
+	if err != nil {
+		t.Fatalf("ImportOutboundsReportWithOptions returned error: %v", err)
+	}
+	if report.Updated != 1 || !report.Details[0].PreservedName {
+		t.Fatalf("expected subscription update preserving manual node, got %#v", report)
+	}
+	snapshot := manager.ConfigSnapshot()
+	got := snapshot.Outbounds[0]
+	if got.Name != "manual-name" || got.ServerName != "manual.example.com" || got.Fingerprint != "firefox" || !got.SkipCertVerify {
+		t.Fatalf("expected manual fields preserved, got %#v", got)
+	}
+	if got.Subscription != "sub" {
+		t.Fatalf("expected subscription source recorded, got %#v", got)
+	}
+}
+
 func TestPreviewRoutingExplainsFinalOutbound(t *testing.T) {
 	db, err := InitDatabase(filepath.Join(t.TempDir(), "nodetools.db"))
 	if err != nil {

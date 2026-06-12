@@ -23,6 +23,9 @@ func TestSingBoxKernelGenerateConfig(t *testing.T) {
 			{Name: "remote", Protocol: "vless", Address: "127.0.0.1", Port: 2080, UUID: "bf000d23-0752-40b4-affe-68f7707a9661", Flow: "xtls-rprx-vision", Security: "reality", TLS: true, ServerName: "example.com", PublicKey: "reality-public-key", Transport: "tcp"},
 			{Name: "ss", Protocol: "shadowsocks", Address: "127.0.0.1", Port: 2081, Method: "aes-128-gcm", Password: "secret"},
 			{Name: "socks-auth", Protocol: "socks5", Address: "127.0.0.1", Port: 2082, Username: "user", Password: "pass"},
+			{Name: "hy2", Protocol: "hysteria2", Address: "127.0.0.1", Port: 2083, Password: "hy-pass", TLS: true, ServerName: "example.com", MPort: "2083,30000-30100", UpMbps: 100, DownMbps: 500},
+			{Name: "tuic", Protocol: "tuic", Address: "127.0.0.1", Port: 2084, UUID: "bf000d23-0752-40b4-affe-68f7707a9661", Password: "tuic-pass", TLS: true, ServerName: "example.com"},
+			{Name: "anytls", Protocol: "anytls", Address: "127.0.0.1", Port: 2085, Password: "any-pass", TLS: true, ServerName: "example.com", IdleSessionCheck: "30s", IdleSessionTimeout: "30s", MinIdleSession: 2},
 		},
 		Routing: RoutingConfig{
 			Mode:            "rule",
@@ -119,6 +122,18 @@ func TestSingBoxKernelGenerateConfig(t *testing.T) {
 	if socks["type"] != "socks" || socks["username"] != "user" || socks["password"] != "pass" {
 		t.Fatalf("expected authenticated socks outbound, got %#v", socks)
 	}
+	hy2 := outbounds[4].(map[string]any)
+	if hy2["server_ports"] == nil || hy2["up_mbps"] != float64(100) || hy2["down_mbps"] != float64(500) {
+		t.Fatalf("expected hysteria2 port hopping and bandwidth fields, got %#v", hy2)
+	}
+	tuic := outbounds[5].(map[string]any)
+	if tuic["congestion_control"] != "bbr" || tuic["udp_relay_mode"] != "native" {
+		t.Fatalf("expected tuic defaults, got %#v", tuic)
+	}
+	anytls := outbounds[6].(map[string]any)
+	if anytls["idle_session_check_interval"] != "30s" || anytls["min_idle_session"] != float64(2) {
+		t.Fatalf("expected anytls idle session fields, got %#v", anytls)
+	}
 	route := cfg["route"].(map[string]any)
 	if route["final"] != "ss" {
 		t.Fatalf("expected default outbound final ss, got %#v", route)
@@ -138,8 +153,8 @@ func TestMihomoKernelGenerateConfig(t *testing.T) {
 		Inbounds:  []InboundConfig{{Name: "local", Protocol: "mixed", Port: 7890}},
 		Outbounds: []OutboundConfig{{Name: "remote", Protocol: "trojan", Address: "127.0.0.1", Port: 443, Password: "secret", TLS: true, ServerName: "example.com"}},
 		Mihomo: MihomoConfig{
-			Providers:   []ProxyProviderConfig{{Name: "sub", URL: "https://example.com/sub.yaml"}},
-			ProxyGroups: []ProxyGroupConfig{{Name: "Auto", Type: "url-test", Use: []string{"sub"}, URL: "http://www.gstatic.com/generate_204", Interval: 300}},
+			Providers:   []ProxyProviderConfig{{Name: "sub", URL: "https://example.com/sub.yaml", HealthCheckInterval: 120, Filter: "香港", ExcludeFilter: "倍率"}},
+			ProxyGroups: []ProxyGroupConfig{{Name: "Auto", Type: "url-test", Use: []string{"sub"}, URL: "http://www.gstatic.com/generate_204", Interval: 300, Tolerance: 80, Lazy: true, Filter: "香港"}},
 			Rules:       []string{"DOMAIN-SUFFIX,example.com,Auto", "MATCH,DIRECT"},
 		},
 	}
@@ -162,6 +177,14 @@ func TestMihomoKernelGenerateConfig(t *testing.T) {
 	groups := cfg["proxy-groups"].([]any)
 	if groups[0].(map[string]any)["name"] != "Auto" {
 		t.Fatalf("expected Auto proxy group, got %#v", groups[0])
+	}
+	if groups[0].(map[string]any)["type"] != "url-test" || groups[0].(map[string]any)["tolerance"] != 80 {
+		t.Fatalf("expected url-test group options, got %#v", groups[0])
+	}
+	providers := cfg["proxy-providers"].(map[string]any)
+	sub := providers["sub"].(map[string]any)
+	if sub["filter"] != "香港" || sub["exclude-filter"] != "倍率" || sub["health-check"] == nil {
+		t.Fatalf("expected provider filter and health check, got %#v", sub)
 	}
 }
 

@@ -318,20 +318,33 @@ func RegisterAPI(mux *http.ServeMux, manager *Manager, auth *Auth) {
 			writeError(w, http.StatusBadRequest, "invalid json body")
 			return
 		}
-		outbounds, parseErrors := ParseOutboundLinks(req.Text)
+		outbounds, parseErrorDetails := ParseOutboundLinksDetailed(req.Text)
+		parseErrors := make([]string, 0, len(parseErrorDetails))
+		for _, detail := range parseErrorDetails {
+			parseErrors = append(parseErrors, detail.Error)
+		}
+		if len(outbounds) == 0 {
+			writeJSON(w, http.StatusBadRequest, ImportLinksResponse{
+				Parsed:      0,
+				Errors:      parseErrors,
+				ParseErrors: parseErrorDetails,
+			})
+			return
+		}
 		report, err := manager.ImportOutboundsReport(outbounds)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
 		writeJSON(w, http.StatusCreated, ImportLinksResponse{
-			Imported:  report.Imported,
-			Parsed:    report.Parsed,
-			Added:     report.Added,
-			Updated:   report.Updated,
-			Unchanged: report.Unchanged,
-			Details:   report.Details,
-			Errors:    parseErrors,
+			Imported:    report.Imported,
+			Parsed:      report.Parsed,
+			Added:       report.Added,
+			Updated:     report.Updated,
+			Unchanged:   report.Unchanged,
+			Details:     report.Details,
+			Errors:      parseErrors,
+			ParseErrors: parseErrorDetails,
 		})
 	})))
 	mux.Handle("POST /api/nodes/{type}/{name}/test", auth.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

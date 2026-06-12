@@ -61,38 +61,43 @@ type InboundConfig struct {
 }
 
 type OutboundConfig struct {
-	OriginalName   string `yaml:"-" json:"original_name,omitempty"`
-	Name           string `yaml:"name" json:"name"`
-	Protocol       string `yaml:"protocol" json:"protocol"`
-	Address        string `yaml:"address" json:"address"`
-	Port           int    `yaml:"port" json:"port"`
-	Disabled       bool   `yaml:"disabled,omitempty" json:"disabled,omitempty"`
-	Username       string `yaml:"username,omitempty" json:"username,omitempty"`
-	UUID           string `yaml:"uuid,omitempty" json:"uuid,omitempty"`
-	Password       string `yaml:"password,omitempty" json:"password,omitempty"`
-	Method         string `yaml:"method,omitempty" json:"method,omitempty"`
-	Flow           string `yaml:"flow,omitempty" json:"flow,omitempty"`
-	Security       string `yaml:"security,omitempty" json:"security,omitempty"`
-	AlterID        int    `yaml:"alter_id,omitempty" json:"alter_id,omitempty"`
-	Network        string `yaml:"network,omitempty" json:"network,omitempty"`
-	TLS            bool   `yaml:"tls,omitempty" json:"tls,omitempty"`
-	ServerName     string `yaml:"server_name,omitempty" json:"server_name,omitempty"`
-	SkipCertVerify bool   `yaml:"skip_cert_verify,omitempty" json:"skip_cert_verify,omitempty"`
-	Transport      string `yaml:"transport,omitempty" json:"transport,omitempty"`
-	Path           string `yaml:"path,omitempty" json:"path,omitempty"`
-	Host           string `yaml:"host,omitempty" json:"host,omitempty"`
-	PublicKey      string `yaml:"public_key,omitempty" json:"public_key,omitempty"`
-	ShortID        string `yaml:"short_id,omitempty" json:"short_id,omitempty"`
-	Fingerprint    string `yaml:"fingerprint,omitempty" json:"fingerprint,omitempty"`
-	ALPN           string `yaml:"alpn,omitempty" json:"alpn,omitempty"`
-	Obfs           string `yaml:"obfs,omitempty" json:"obfs,omitempty"`
-	ObfsPassword   string `yaml:"obfs_password,omitempty" json:"obfs_password,omitempty"`
-	MPort          string `yaml:"mport,omitempty" json:"mport,omitempty"`
-	UpMbps         int    `yaml:"up_mbps,omitempty" json:"up_mbps,omitempty"`
-	DownMbps       int    `yaml:"down_mbps,omitempty" json:"down_mbps,omitempty"`
-	Congestion     string `yaml:"congestion,omitempty" json:"congestion,omitempty"`
-	UDPRelayMode   string `yaml:"udp_relay_mode,omitempty" json:"udp_relay_mode,omitempty"`
-	Raw            string `yaml:"raw,omitempty" json:"raw,omitempty"`
+	OriginalName       string `yaml:"-" json:"original_name,omitempty"`
+	Name               string `yaml:"name" json:"name"`
+	Protocol           string `yaml:"protocol" json:"protocol"`
+	Address            string `yaml:"address" json:"address"`
+	Port               int    `yaml:"port" json:"port"`
+	Disabled           bool   `yaml:"disabled,omitempty" json:"disabled,omitempty"`
+	Username           string `yaml:"username,omitempty" json:"username,omitempty"`
+	UUID               string `yaml:"uuid,omitempty" json:"uuid,omitempty"`
+	Password           string `yaml:"password,omitempty" json:"password,omitempty"`
+	Method             string `yaml:"method,omitempty" json:"method,omitempty"`
+	Flow               string `yaml:"flow,omitempty" json:"flow,omitempty"`
+	Security           string `yaml:"security,omitempty" json:"security,omitempty"`
+	AlterID            int    `yaml:"alter_id,omitempty" json:"alter_id,omitempty"`
+	Network            string `yaml:"network,omitempty" json:"network,omitempty"`
+	TLS                bool   `yaml:"tls,omitempty" json:"tls,omitempty"`
+	ServerName         string `yaml:"server_name,omitempty" json:"server_name,omitempty"`
+	SkipCertVerify     bool   `yaml:"skip_cert_verify,omitempty" json:"skip_cert_verify,omitempty"`
+	Transport          string `yaml:"transport,omitempty" json:"transport,omitempty"`
+	Path               string `yaml:"path,omitempty" json:"path,omitempty"`
+	Host               string `yaml:"host,omitempty" json:"host,omitempty"`
+	PublicKey          string `yaml:"public_key,omitempty" json:"public_key,omitempty"`
+	ShortID            string `yaml:"short_id,omitempty" json:"short_id,omitempty"`
+	Fingerprint        string `yaml:"fingerprint,omitempty" json:"fingerprint,omitempty"`
+	ALPN               string `yaml:"alpn,omitempty" json:"alpn,omitempty"`
+	Obfs               string `yaml:"obfs,omitempty" json:"obfs,omitempty"`
+	ObfsPassword       string `yaml:"obfs_password,omitempty" json:"obfs_password,omitempty"`
+	MPort              string `yaml:"mport,omitempty" json:"mport,omitempty"`
+	UpMbps             int    `yaml:"up_mbps,omitempty" json:"up_mbps,omitempty"`
+	DownMbps           int    `yaml:"down_mbps,omitempty" json:"down_mbps,omitempty"`
+	Congestion         string `yaml:"congestion,omitempty" json:"congestion,omitempty"`
+	UDPRelayMode       string `yaml:"udp_relay_mode,omitempty" json:"udp_relay_mode,omitempty"`
+	Subscription       string `yaml:"subscription,omitempty" json:"subscription,omitempty"`
+	Group              string `yaml:"group,omitempty" json:"group,omitempty"`
+	IdleSessionCheck   string `yaml:"idle_session_check,omitempty" json:"idle_session_check,omitempty"`
+	IdleSessionTimeout string `yaml:"idle_session_timeout,omitempty" json:"idle_session_timeout,omitempty"`
+	MinIdleSession     int    `yaml:"min_idle_session,omitempty" json:"min_idle_session,omitempty"`
+	Raw                string `yaml:"raw,omitempty" json:"raw,omitempty"`
 }
 
 type RoutingRule struct {
@@ -119,23 +124,35 @@ type MihomoConfig struct {
 }
 
 type ProxyGroupConfig struct {
-	Name      string   `yaml:"name" json:"name"`
-	Type      string   `yaml:"type" json:"type"`
-	Proxies   []string `yaml:"proxies,omitempty" json:"proxies,omitempty"`
-	Use       []string `yaml:"use,omitempty" json:"use,omitempty"`
-	URL       string   `yaml:"url,omitempty" json:"url,omitempty"`
-	Interval  int      `yaml:"interval,omitempty" json:"interval,omitempty"`
-	Tolerance int      `yaml:"tolerance,omitempty" json:"tolerance,omitempty"`
+	Name          string   `yaml:"name" json:"name"`
+	Type          string   `yaml:"type" json:"type"`
+	Proxies       []string `yaml:"proxies,omitempty" json:"proxies,omitempty"`
+	Use           []string `yaml:"use,omitempty" json:"use,omitempty"`
+	URL           string   `yaml:"url,omitempty" json:"url,omitempty"`
+	Interval      int      `yaml:"interval,omitempty" json:"interval,omitempty"`
+	Tolerance     int      `yaml:"tolerance,omitempty" json:"tolerance,omitempty"`
+	Lazy          bool     `yaml:"lazy,omitempty" json:"lazy,omitempty"`
+	Filter        string   `yaml:"filter,omitempty" json:"filter,omitempty"`
+	ExcludeFilter string   `yaml:"exclude_filter,omitempty" json:"exclude_filter,omitempty"`
 }
 
 type ProxyProviderConfig struct {
-	Name            string `yaml:"name" json:"name"`
-	Type            string `yaml:"type" json:"type"`
-	URL             string `yaml:"url" json:"url"`
-	Path            string `yaml:"path,omitempty" json:"path,omitempty"`
-	Interval        int    `yaml:"interval,omitempty" json:"interval,omitempty"`
-	HealthCheckURL  string `yaml:"health_check_url,omitempty" json:"health_check_url,omitempty"`
-	HealthCheckLazy bool   `yaml:"health_check_lazy,omitempty" json:"health_check_lazy,omitempty"`
+	Name                string   `yaml:"name" json:"name"`
+	Type                string   `yaml:"type" json:"type"`
+	URL                 string   `yaml:"url" json:"url"`
+	Path                string   `yaml:"path,omitempty" json:"path,omitempty"`
+	Interval            int      `yaml:"interval,omitempty" json:"interval,omitempty"`
+	Group               string   `yaml:"group,omitempty" json:"group,omitempty"`
+	RenamePrefix        string   `yaml:"rename_prefix,omitempty" json:"rename_prefix,omitempty"`
+	RenameSuffix        string   `yaml:"rename_suffix,omitempty" json:"rename_suffix,omitempty"`
+	DedupStrategy       string   `yaml:"dedup_strategy,omitempty" json:"dedup_strategy,omitempty"`
+	PreserveUserFields  bool     `yaml:"preserve_user_fields,omitempty" json:"preserve_user_fields,omitempty"`
+	PreserveFields      []string `yaml:"preserve_fields,omitempty" json:"preserve_fields,omitempty"`
+	HealthCheckURL      string   `yaml:"health_check_url,omitempty" json:"health_check_url,omitempty"`
+	HealthCheckLazy     bool     `yaml:"health_check_lazy,omitempty" json:"health_check_lazy,omitempty"`
+	HealthCheckInterval int      `yaml:"health_check_interval,omitempty" json:"health_check_interval,omitempty"`
+	Filter              string   `yaml:"filter,omitempty" json:"filter,omitempty"`
+	ExcludeFilter       string   `yaml:"exclude_filter,omitempty" json:"exclude_filter,omitempty"`
 }
 
 func LoadConfig(path string) (Config, error) {

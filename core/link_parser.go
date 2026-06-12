@@ -17,40 +17,68 @@ type ImportLinksRequest struct {
 }
 
 type ImportLinksResponse struct {
-	Imported  []Node                 `json:"imported"`
-	Parsed    int                    `json:"parsed"`
-	Added     int                    `json:"added"`
-	Updated   int                    `json:"updated"`
-	Unchanged int                    `json:"unchanged"`
-	Details   []ImportOutboundDetail `json:"details,omitempty"`
-	Errors    []string               `json:"errors,omitempty"`
+	Imported    []Node                 `json:"imported"`
+	Parsed      int                    `json:"parsed"`
+	Added       int                    `json:"added"`
+	Updated     int                    `json:"updated"`
+	Unchanged   int                    `json:"unchanged"`
+	Details     []ImportOutboundDetail `json:"details,omitempty"`
+	Errors      []string               `json:"errors,omitempty"`
+	ParseErrors []ImportParseError     `json:"parse_errors,omitempty"`
+}
+
+type ImportParseError struct {
+	Index  int    `json:"index"`
+	Input  string `json:"input"`
+	Error  string `json:"error"`
+	Source string `json:"source,omitempty"`
 }
 
 func ParseOutboundLinks(text string) ([]OutboundConfig, []string) {
+	outbounds, details := ParseOutboundLinksDetailed(text)
+	if len(details) == 0 {
+		return outbounds, nil
+	}
+	errors := make([]string, 0, len(details))
+	for _, detail := range details {
+		errors = append(errors, detail.Error)
+	}
+	return outbounds, errors
+}
+
+func ParseOutboundLinksDetailed(text string) ([]OutboundConfig, []ImportParseError) {
 	text = strings.TrimSpace(text)
 	if text == "" {
-		return nil, []string{"empty input"}
+		return nil, []ImportParseError{{Index: 0, Error: "empty input"}}
 	}
 
 	var outbounds []OutboundConfig
-	var errors []string
+	var errors []ImportParseError
 	if yamlOutbounds := parseOutboundYAML(text); len(yamlOutbounds) > 0 {
 		return uniqueOutbounds(yamlOutbounds), nil
 	}
-	for _, item := range extractLinkCandidates(text) {
+	for index, item := range extractLinkCandidates(text) {
 		parsed, err := parseOutboundLink(item)
 		if err != nil {
-			errors = append(errors, err.Error())
+			errors = append(errors, ImportParseError{Index: index + 1, Input: redactLongInput(item), Error: fmt.Sprintf("第 %d 条解析失败: %v", index+1, err)})
 			continue
 		}
 		outbounds = append(outbounds, parsed)
 	}
 	if len(outbounds) == 0 {
 		if decoded, ok := decodeBase64String(text); ok {
-			return ParseOutboundLinks(decoded)
+			return ParseOutboundLinksDetailed(decoded)
 		}
 	}
 	return uniqueOutbounds(outbounds), errors
+}
+
+func redactLongInput(value string) string {
+	value = strings.TrimSpace(value)
+	if len(value) > 160 {
+		return value[:160] + "..."
+	}
+	return value
 }
 
 func extractLinkCandidates(text string) []string {
@@ -98,31 +126,35 @@ func parseYAMLProxyList(rawProxies []any) []OutboundConfig {
 			continue
 		}
 		out := OutboundConfig{
-			Name:           stringValue(proxy["name"]),
-			Protocol:       normalizeYAMLProtocol(stringValue(proxy["type"])),
-			Address:        stringValue(proxy["server"]),
-			Port:           intValue(proxy["port"]),
-			Username:       stringValue(proxy["username"]),
-			UUID:           stringValue(proxy["uuid"]),
-			Password:       firstNonEmpty(stringValue(proxy["password"]), stringValue(proxy["passwd"])),
-			Method:         firstNonEmpty(stringValue(proxy["cipher"]), stringValue(proxy["method"])),
-			Flow:           stringValue(proxy["flow"]),
-			Security:       firstNonEmpty(stringValue(proxy["security"]), stringValue(proxy["cipher"])),
-			AlterID:        intValue(firstNonEmptyAny(proxy["alterId"], proxy["alter_id"], proxy["aid"])),
-			Network:        stringValue(proxy["network"]),
-			TLS:            boolValue(proxy["tls"]),
-			ServerName:     firstNonEmpty(stringValue(proxy["servername"]), stringValue(proxy["sni"]), stringValue(proxy["peer"])),
-			SkipCertVerify: boolValue(firstNonEmptyAny(proxy["skip-cert-verify"], proxy["skip_cert_verify"])),
-			PublicKey:      firstNonEmpty(stringValue(proxy["public-key"]), stringValue(proxy["public_key"]), stringValue(proxy["pbk"])),
-			ShortID:        firstNonEmpty(stringValue(proxy["short-id"]), stringValue(proxy["short_id"]), stringValue(proxy["sid"])),
-			Fingerprint:    firstNonEmpty(stringValue(proxy["client-fingerprint"]), stringValue(proxy["fingerprint"]), stringValue(proxy["fp"])),
-			ALPN:           stringListValue(proxy["alpn"]),
-			Obfs:           stringValue(proxy["obfs"]),
-			MPort:          firstNonEmpty(stringValue(proxy["mport"]), stringValue(proxy["ports"])),
-			UpMbps:         intValue(firstNonEmptyAny(proxy["up"], proxy["upmbps"])),
-			DownMbps:       intValue(firstNonEmptyAny(proxy["down"], proxy["downmbps"])),
-			Congestion:     firstNonEmpty(stringValue(proxy["congestion-controller"]), stringValue(proxy["congestion_control"])),
-			UDPRelayMode:   firstNonEmpty(stringValue(proxy["udp-relay-mode"]), stringValue(proxy["udp_relay_mode"])),
+			Name:               stringValue(proxy["name"]),
+			Protocol:           normalizeYAMLProtocol(stringValue(proxy["type"])),
+			Address:            stringValue(proxy["server"]),
+			Port:               intValue(proxy["port"]),
+			Username:           stringValue(proxy["username"]),
+			UUID:               stringValue(proxy["uuid"]),
+			Password:           firstNonEmpty(stringValue(proxy["password"]), stringValue(proxy["passwd"])),
+			Method:             firstNonEmpty(stringValue(proxy["cipher"]), stringValue(proxy["method"])),
+			Flow:               stringValue(proxy["flow"]),
+			Security:           firstNonEmpty(stringValue(proxy["security"]), stringValue(proxy["cipher"])),
+			AlterID:            intValue(firstNonEmptyAny(proxy["alterId"], proxy["alter_id"], proxy["aid"])),
+			Network:            stringValue(proxy["network"]),
+			TLS:                boolValue(proxy["tls"]),
+			ServerName:         firstNonEmpty(stringValue(proxy["servername"]), stringValue(proxy["sni"]), stringValue(proxy["peer"])),
+			SkipCertVerify:     boolValue(firstNonEmptyAny(proxy["skip-cert-verify"], proxy["skip_cert_verify"])),
+			PublicKey:          firstNonEmpty(stringValue(proxy["public-key"]), stringValue(proxy["public_key"]), stringValue(proxy["pbk"])),
+			ShortID:            firstNonEmpty(stringValue(proxy["short-id"]), stringValue(proxy["short_id"]), stringValue(proxy["sid"])),
+			Fingerprint:        firstNonEmpty(stringValue(proxy["client-fingerprint"]), stringValue(proxy["fingerprint"]), stringValue(proxy["fp"])),
+			ALPN:               stringListValue(proxy["alpn"]),
+			Obfs:               stringValue(proxy["obfs"]),
+			MPort:              firstNonEmpty(stringValue(proxy["mport"]), stringValue(proxy["ports"])),
+			UpMbps:             intValue(firstNonEmptyAny(proxy["up"], proxy["upmbps"])),
+			DownMbps:           intValue(firstNonEmptyAny(proxy["down"], proxy["downmbps"])),
+			Congestion:         firstNonEmpty(stringValue(proxy["congestion-controller"]), stringValue(proxy["congestion_control"])),
+			UDPRelayMode:       firstNonEmpty(stringValue(proxy["udp-relay-mode"]), stringValue(proxy["udp_relay_mode"])),
+			Group:              firstNonEmpty(stringValue(proxy["group"]), stringValue(proxy["sub-name"])),
+			IdleSessionCheck:   stringValue(firstNonEmptyAny(proxy["idle-session-check"], proxy["idle_session_check"], proxy["idle_session_check_interval"])),
+			IdleSessionTimeout: stringValue(firstNonEmptyAny(proxy["idle-session-timeout"], proxy["idle_session_timeout"])),
+			MinIdleSession:     intValue(firstNonEmptyAny(proxy["min-idle-session"], proxy["min_idle_session"])),
 		}
 		if out.Protocol == "shadowsocks" && out.Method == "" {
 			out.Method = stringValue(proxy["cipher"])
@@ -164,23 +196,27 @@ func parseSingBoxOutboundList(rawOutbounds []any) []OutboundConfig {
 			continue
 		}
 		out := OutboundConfig{
-			Name:         firstNonEmpty(stringValue(item["tag"]), stringValue(item["name"])),
-			Protocol:     normalizeLinkProtocol(stringValue(item["type"])),
-			Address:      stringValue(item["server"]),
-			Port:         intValue(item["server_port"]),
-			Username:     stringValue(item["username"]),
-			UUID:         stringValue(item["uuid"]),
-			Password:     stringValue(item["password"]),
-			Method:       stringValue(item["method"]),
-			Flow:         stringValue(item["flow"]),
-			Security:     stringValue(item["security"]),
-			AlterID:      intValue(item["alter_id"]),
-			Network:      stringValue(item["network"]),
-			Transport:    stringValue(item["network"]),
-			UpMbps:       intValue(item["up_mbps"]),
-			DownMbps:     intValue(item["down_mbps"]),
-			Congestion:   stringValue(item["congestion_control"]),
-			UDPRelayMode: stringValue(item["udp_relay_mode"]),
+			Name:               firstNonEmpty(stringValue(item["tag"]), stringValue(item["name"])),
+			Protocol:           normalizeLinkProtocol(stringValue(item["type"])),
+			Address:            stringValue(item["server"]),
+			Port:               intValue(item["server_port"]),
+			Username:           stringValue(item["username"]),
+			UUID:               stringValue(item["uuid"]),
+			Password:           stringValue(item["password"]),
+			Method:             stringValue(item["method"]),
+			Flow:               stringValue(item["flow"]),
+			Security:           stringValue(item["security"]),
+			AlterID:            intValue(item["alter_id"]),
+			Network:            stringValue(item["network"]),
+			Transport:          stringValue(item["network"]),
+			UpMbps:             intValue(item["up_mbps"]),
+			DownMbps:           intValue(item["down_mbps"]),
+			Congestion:         stringValue(item["congestion_control"]),
+			UDPRelayMode:       stringValue(item["udp_relay_mode"]),
+			Group:              stringValue(item["group"]),
+			IdleSessionCheck:   stringValue(item["idle_session_check_interval"]),
+			IdleSessionTimeout: stringValue(item["idle_session_timeout"]),
+			MinIdleSession:     intValue(item["min_idle_session"]),
 		}
 		if transport, ok := item["transport"].(map[string]any); ok {
 			out.Transport = stringValue(transport["type"])
@@ -258,26 +294,30 @@ func parseOutboundLink(raw string) (OutboundConfig, error) {
 	}
 
 	out := OutboundConfig{
-		Name:         name,
-		Protocol:     normalizeLinkProtocol(scheme),
-		Address:      host,
-		Port:         port,
-		Raw:          raw,
-		Flow:         firstNonEmpty(query.Get("flow"), xtlsFlow(query.Get("xtls"))),
-		ServerName:   firstNonEmpty(query.Get("peer"), query.Get("sni"), query.Get("servername"), query.Get("host")),
-		PublicKey:    firstNonEmpty(query.Get("pbk"), query.Get("public-key"), query.Get("public_key")),
-		ShortID:      firstNonEmpty(query.Get("sid"), query.Get("short-id"), query.Get("short_id")),
-		Fingerprint:  firstNonEmpty(query.Get("fp"), query.Get("fingerprint")),
-		ALPN:         query.Get("alpn"),
-		Path:         firstNonEmpty(query.Get("path"), query.Get("serviceName"), query.Get("service_name")),
-		Host:         firstNonEmpty(query.Get("obfsParam"), query.Get("host")),
-		Obfs:         query.Get("obfs"),
-		ObfsPassword: firstNonEmpty(query.Get("obfs-password"), query.Get("obfs_password")),
-		MPort:        query.Get("mport"),
-		UpMbps:       atoiDefault(firstNonEmpty(query.Get("upmbps"), query.Get("up")), 0),
-		DownMbps:     atoiDefault(firstNonEmpty(query.Get("downmbps"), query.Get("down")), 0),
-		Congestion:   query.Get("congestion_control"),
-		UDPRelayMode: query.Get("udp_relay_mode"),
+		Name:               name,
+		Protocol:           normalizeLinkProtocol(scheme),
+		Address:            host,
+		Port:               port,
+		Raw:                raw,
+		Flow:               firstNonEmpty(query.Get("flow"), xtlsFlow(query.Get("xtls"))),
+		ServerName:         firstNonEmpty(query.Get("peer"), query.Get("sni"), query.Get("servername"), query.Get("host")),
+		PublicKey:          firstNonEmpty(query.Get("pbk"), query.Get("public-key"), query.Get("public_key")),
+		ShortID:            firstNonEmpty(query.Get("sid"), query.Get("short-id"), query.Get("short_id")),
+		Fingerprint:        firstNonEmpty(query.Get("fp"), query.Get("fingerprint")),
+		ALPN:               query.Get("alpn"),
+		Path:               firstNonEmpty(query.Get("path"), query.Get("serviceName"), query.Get("service_name")),
+		Host:               firstNonEmpty(query.Get("obfsParam"), query.Get("host")),
+		Obfs:               query.Get("obfs"),
+		ObfsPassword:       firstNonEmpty(query.Get("obfs-password"), query.Get("obfs_password")),
+		MPort:              query.Get("mport"),
+		UpMbps:             atoiDefault(firstNonEmpty(query.Get("upmbps"), query.Get("up")), 0),
+		DownMbps:           atoiDefault(firstNonEmpty(query.Get("downmbps"), query.Get("down")), 0),
+		Congestion:         query.Get("congestion_control"),
+		UDPRelayMode:       query.Get("udp_relay_mode"),
+		Group:              query.Get("group"),
+		IdleSessionCheck:   firstNonEmpty(query.Get("idle_session_check"), query.Get("idle_session_check_interval")),
+		IdleSessionTimeout: query.Get("idle_session_timeout"),
+		MinIdleSession:     atoiDefault(query.Get("min_idle_session"), 0),
 	}
 	if query.Get("tls") == "1" || strings.EqualFold(query.Get("security"), "tls") || strings.EqualFold(query.Get("security"), "reality") || out.ServerName != "" {
 		out.TLS = true

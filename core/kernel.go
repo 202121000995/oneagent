@@ -611,6 +611,9 @@ func singBoxOutbounds(outbounds []OutboundConfig) []map[string]any {
 		case "hysteria2":
 			base["type"] = "hysteria2"
 			base["password"] = outbound.Password
+			if outbound.MPort != "" {
+				base["server_ports"] = splitCSV(outbound.MPort)
+			}
 			if outbound.UpMbps > 0 {
 				base["up_mbps"] = outbound.UpMbps
 			}
@@ -626,13 +629,14 @@ func singBoxOutbounds(outbounds []OutboundConfig) []map[string]any {
 			base["type"] = "tuic"
 			base["uuid"] = outbound.UUID
 			base["password"] = outbound.Password
-			addOptional(base, "congestion_control", outbound.Congestion)
-			addOptional(base, "udp_relay_mode", outbound.UDPRelayMode)
+			addOptional(base, "congestion_control", firstNonEmpty(outbound.Congestion, "bbr"))
+			addOptional(base, "udp_relay_mode", firstNonEmpty(outbound.UDPRelayMode, "native"))
 			addTLS(base, outbound)
 			items = append(items, base)
 		case "anytls":
 			base["type"] = "anytls"
 			base["password"] = outbound.Password
+			addAnyTLSIdleFields(base, outbound)
 			addTLS(base, outbound)
 			items = append(items, base)
 		case "naive":
@@ -767,6 +771,7 @@ func mihomoProxies(outbounds []OutboundConfig) []map[string]any {
 				base["obfs"] = outbound.Obfs
 				addOptional(base, "obfs-password", outbound.ObfsPassword)
 			}
+			addOptional(base, "ports", outbound.MPort)
 			addMihomoTLS(base, outbound)
 			items = append(items, base)
 		case "tuic":
@@ -802,6 +807,14 @@ func mihomoProxies(outbounds []OutboundConfig) []map[string]any {
 func addOptional(target map[string]any, key string, value string) {
 	if value != "" {
 		target[key] = value
+	}
+}
+
+func addAnyTLSIdleFields(target map[string]any, outbound OutboundConfig) {
+	addOptional(target, "idle_session_check_interval", outbound.IdleSessionCheck)
+	addOptional(target, "idle_session_timeout", outbound.IdleSessionTimeout)
+	if outbound.MinIdleSession > 0 {
+		target["min_idle_session"] = outbound.MinIdleSession
 	}
 }
 
@@ -891,6 +904,12 @@ func addMihomoTLS(target map[string]any, outbound OutboundConfig) {
 	if outbound.Security == "reality" || outbound.PublicKey != "" {
 		target["reality-opts"] = map[string]any{"public-key": outbound.PublicKey, "short-id": outbound.ShortID}
 	}
+	if outbound.Fingerprint != "" {
+		target["client-fingerprint"] = outbound.Fingerprint
+	}
+	if outbound.ALPN != "" {
+		target["alpn"] = splitCSV(outbound.ALPN)
+	}
 }
 
 func addMihomoNetwork(target map[string]any, outbound OutboundConfig) {
@@ -931,8 +950,15 @@ func mihomoProviders(cfg MihomoConfig) map[string]any {
 			path = "./providers/" + provider.Name + ".yaml"
 		}
 		item := map[string]any{"type": providerType, "url": provider.URL, "path": path, "interval": interval}
-		if provider.HealthCheckURL != "" {
-			item["health-check"] = map[string]any{"enable": true, "url": provider.HealthCheckURL, "lazy": provider.HealthCheckLazy}
+		addOptional(item, "filter", provider.Filter)
+		addOptional(item, "exclude-filter", provider.ExcludeFilter)
+		healthURL := firstNonEmpty(provider.HealthCheckURL, "http://www.gstatic.com/generate_204")
+		if healthURL != "" {
+			health := map[string]any{"enable": true, "url": healthURL, "lazy": provider.HealthCheckLazy}
+			if provider.HealthCheckInterval > 0 {
+				health["interval"] = provider.HealthCheckInterval
+			}
+			item["health-check"] = health
 		}
 		providers[provider.Name] = item
 	}
@@ -970,6 +996,11 @@ func mihomoProxyGroups(cfg MihomoConfig, defaultProxies []string) []map[string]a
 		if group.Tolerance > 0 {
 			item["tolerance"] = group.Tolerance
 		}
+		if group.Lazy {
+			item["lazy"] = true
+		}
+		addOptional(item, "filter", group.Filter)
+		addOptional(item, "exclude-filter", group.ExcludeFilter)
 		groups = append(groups, item)
 	}
 	return groups

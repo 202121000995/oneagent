@@ -739,6 +739,16 @@ const fillMihomoForm = (mihomo) => {
   const group = mihomo.proxy_groups?.[0] || {};
   form.elements.provider_name.value = provider.name || "";
   form.elements.provider_url.value = provider.url || "";
+  form.elements.provider_interval.value = provider.interval || 3600;
+  form.elements.provider_group.value = provider.group || "";
+  form.elements.rename_prefix.value = provider.rename_prefix || "";
+  form.elements.rename_suffix.value = provider.rename_suffix || "";
+  form.elements.dedup_strategy.value = provider.dedup_strategy || "equivalent";
+  form.elements.preserve_user_fields.value = provider.preserve_user_fields === false ? "false" : "true";
+  form.elements.health_check_url.value = provider.health_check_url || "http://www.gstatic.com/generate_204";
+  form.elements.health_check_interval.value = provider.health_check_interval || 300;
+  form.elements.filter.value = provider.filter || "";
+  form.elements.exclude_filter.value = provider.exclude_filter || "";
   form.elements.group_name.value = group.name || "NodeTools";
   form.elements.group_type.value = group.type || "select";
   form.elements.rules.value = (mihomo.rules || ["MATCH,NodeTools"]).join("\n");
@@ -900,9 +910,17 @@ const mihomoPayloadFromForm = (form) => {
     name: data.provider_name,
     type: "http",
     url: data.provider_url,
-    interval: 3600,
-    health_check_url: "http://www.gstatic.com/generate_204",
+    interval: Number(data.provider_interval || 3600),
+    group: data.provider_group || "",
+    rename_prefix: data.rename_prefix || "",
+    rename_suffix: data.rename_suffix || "",
+    dedup_strategy: data.dedup_strategy || "equivalent",
+    preserve_user_fields: data.preserve_user_fields !== "false",
+    health_check_url: data.health_check_url || "http://www.gstatic.com/generate_204",
+    health_check_interval: Number(data.health_check_interval || 300),
     health_check_lazy: true,
+    filter: data.filter || "",
+    exclude_filter: data.exclude_filter || "",
   }] : [];
   const groupName = data.group_name || "NodeTools";
   return {
@@ -912,6 +930,12 @@ const mihomoPayloadFromForm = (form) => {
       type: data.group_type || "select",
       proxies: ["DIRECT"],
       use: provider.map((item) => item.name),
+      url: data.health_check_url || "http://www.gstatic.com/generate_204",
+      interval: Number(data.health_check_interval || 300),
+      tolerance: 50,
+      lazy: true,
+      filter: data.filter || "",
+      exclude_filter: data.exclude_filter || "",
     }],
     rules: String(data.rules || "MATCH," + groupName)
       .split(/\r?\n/)

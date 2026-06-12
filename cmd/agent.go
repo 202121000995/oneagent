@@ -44,6 +44,7 @@ func main() {
 		log.Fatalf("apply config: %v", err)
 	}
 	manager.StartTrafficSampler()
+	manager.StartSubscriptionUpdater()
 	defer manager.Stop()
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

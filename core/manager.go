@@ -55,23 +55,25 @@ type Manager struct {
 	startedAt  time.Time
 	stopCh     chan struct{}
 
-	mu        sync.RWMutex
-	cfg       Config
-	inbounds  map[string]InboundConfig
-	outbounds map[string]OutboundConfig
-	rules     []RoutingRule
-	traffic   map[string]*Traffic
-	health    map[string]Health
+	mu            sync.RWMutex
+	cfg           Config
+	inbounds      map[string]InboundConfig
+	outbounds     map[string]OutboundConfig
+	rules         []RoutingRule
+	traffic       map[string]*Traffic
+	health        map[string]Health
+	subscriptions map[string]time.Time
 }
 
 type managerSnapshot struct {
-	kernel    Kernel
-	cfg       Config
-	inbounds  map[string]InboundConfig
-	outbounds map[string]OutboundConfig
-	rules     []RoutingRule
-	traffic   map[string]*Traffic
-	health    map[string]Health
+	kernel        Kernel
+	cfg           Config
+	inbounds      map[string]InboundConfig
+	outbounds     map[string]OutboundConfig
+	rules         []RoutingRule
+	traffic       map[string]*Traffic
+	health        map[string]Health
+	subscriptions map[string]time.Time
 }
 
 type ConfigHistoryEntry struct {
@@ -139,6 +141,11 @@ type ImportOutboundsReport struct {
 	Details   []ImportOutboundDetail `json:"details,omitempty"`
 }
 
+type ImportOutboundsOptions struct {
+	Provider         ProxyProviderConfig
+	FromSubscription bool
+}
+
 type RoutingPreviewRequest struct {
 	Inbound  string `json:"inbound"`
 	Target   string `json:"target"`
@@ -172,15 +179,16 @@ type OutboundInspection struct {
 
 func NewManager(db *sql.DB, configPath string) *Manager {
 	return &Manager{
-		db:         db,
-		kernel:     NewPlaceholderKernel(),
-		configPath: configPath,
-		startedAt:  time.Now(),
-		stopCh:     make(chan struct{}),
-		inbounds:   map[string]InboundConfig{},
-		outbounds:  map[string]OutboundConfig{},
-		traffic:    map[string]*Traffic{},
-		health:     map[string]Health{},
+		db:            db,
+		kernel:        NewPlaceholderKernel(),
+		configPath:    configPath,
+		startedAt:     time.Now(),
+		stopCh:        make(chan struct{}),
+		inbounds:      map[string]InboundConfig{},
+		outbounds:     map[string]OutboundConfig{},
+		traffic:       map[string]*Traffic{},
+		health:        map[string]Health{},
+		subscriptions: map[string]time.Time{},
 	}
 }
 
@@ -221,14 +229,19 @@ func (m *Manager) snapshotLocked() managerSnapshot {
 	for name, item := range m.health {
 		health[name] = item
 	}
+	subscriptions := make(map[string]time.Time, len(m.subscriptions))
+	for name, item := range m.subscriptions {
+		subscriptions[name] = item
+	}
 	return managerSnapshot{
-		kernel:    m.kernel,
-		cfg:       cloneConfig(m.cfg),
-		inbounds:  inbounds,
-		outbounds: outbounds,
-		rules:     append([]RoutingRule(nil), m.rules...),
-		traffic:   traffic,
-		health:    health,
+		kernel:        m.kernel,
+		cfg:           cloneConfig(m.cfg),
+		inbounds:      inbounds,
+		outbounds:     outbounds,
+		rules:         append([]RoutingRule(nil), m.rules...),
+		traffic:       traffic,
+		health:        health,
+		subscriptions: subscriptions,
 	}
 }
 
@@ -240,6 +253,7 @@ func (m *Manager) restoreLocked(snapshot managerSnapshot) {
 	m.rules = append([]RoutingRule(nil), snapshot.rules...)
 	m.traffic = snapshot.traffic
 	m.health = snapshot.health
+	m.subscriptions = snapshot.subscriptions
 }
 
 func (m *Manager) commitWithRollbackLocked(snapshot managerSnapshot) error {
@@ -727,6 +741,10 @@ func (m *Manager) ImportOutbounds(outbounds []OutboundConfig) ([]Node, error) {
 }
 
 func (m *Manager) ImportOutboundsReport(outbounds []OutboundConfig) (ImportOutboundsReport, error) {
+	return m.ImportOutboundsReportWithOptions(outbounds, ImportOutboundsOptions{})
+}
+
+func (m *Manager) ImportOutboundsReportWithOptions(outbounds []OutboundConfig, options ImportOutboundsOptions) (ImportOutboundsReport, error) {
 	if len(outbounds) == 0 {
 		return ImportOutboundsReport{}, fmt.Errorf("no outbounds to import")
 	}
@@ -741,18 +759,22 @@ func (m *Manager) ImportOutboundsReport(outbounds []OutboundConfig) (ImportOutbo
 	}
 	for _, outbound := range outbounds {
 		outbound = enrichOutboundFromRaw(outbound)
+		outbound = applyProviderImportOptions(outbound, options.Provider, options.FromSubscription)
 		originalName := outbound.Name
 		action := "added"
 		preservedName := false
 		if outbound.Name == "" {
 			outbound.Name = outbound.Protocol + "-" + outbound.Address
 		}
-		if existing := m.findEquivalentOutboundLocked(outbound); existing != "" {
+		if existing := m.findMatchingOutboundLocked(outbound, options.Provider); existing != "" {
 			action = "updated"
 			if existingConfig, ok := m.outbounds[existing]; ok && outboundConfigEquivalent(existingConfig, outbound) {
 				action = "unchanged"
 			}
 			preservedName = existing != originalName
+			if existingConfig, ok := m.outbounds[existing]; ok && shouldPreserveUserFields(options.Provider, options.FromSubscription) {
+				outbound = mergePreservedOutboundFields(existingConfig, outbound, options.Provider.PreserveFields)
+			}
 			outbound.Name = existing
 		} else {
 			outbound.Name = m.uniqueOutboundNameLocked(outbound.Name)
@@ -803,6 +825,10 @@ func (m *Manager) UpdateSubscriptions() ([]SubscriptionUpdateResult, error) {
 	m.mu.RLock()
 	providers := append([]ProxyProviderConfig(nil), m.cfg.Mihomo.Providers...)
 	m.mu.RUnlock()
+	return m.updateSubscriptionsForProviders(providers)
+}
+
+func (m *Manager) updateSubscriptionsForProviders(providers []ProxyProviderConfig) ([]SubscriptionUpdateResult, error) {
 	if len(providers) == 0 {
 		return nil, fmt.Errorf("no subscription providers configured")
 	}
@@ -819,11 +845,13 @@ func (m *Manager) UpdateSubscriptions() ([]SubscriptionUpdateResult, error) {
 			results = append(results, result)
 			continue
 		}
-		outbounds, parseErrors := ParseOutboundLinks(string(body))
+		outbounds, parseErrorDetails := ParseOutboundLinksDetailed(string(body))
 		result.Parsed = len(outbounds)
-		result.Errors = append(result.Errors, parseErrors...)
+		for _, detail := range parseErrorDetails {
+			result.Errors = append(result.Errors, detail.Error)
+		}
 		if len(outbounds) > 0 {
-			report, importErr := m.ImportOutboundsReport(outbounds)
+			report, importErr := m.ImportOutboundsReportWithOptions(outbounds, ImportOutboundsOptions{Provider: provider, FromSubscription: true})
 			if importErr != nil {
 				result.Errors = append(result.Errors, importErr.Error())
 			} else {
@@ -839,9 +867,71 @@ func (m *Manager) UpdateSubscriptions() ([]SubscriptionUpdateResult, error) {
 				}
 			}
 		}
+		m.markSubscriptionUpdated(provider.Name)
 		results = append(results, result)
 	}
 	return results, nil
+}
+
+func (m *Manager) StartSubscriptionUpdater() {
+	go func() {
+		ticker := time.NewTicker(time.Minute)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-m.stopCh:
+				return
+			case <-ticker.C:
+				providers := m.dueSubscriptionProviders()
+				if len(providers) == 0 {
+					continue
+				}
+				results, err := m.updateSubscriptionsForProviders(providers)
+				if err != nil {
+					log.Printf("subscription auto update failed: %v", err)
+					continue
+				}
+				for _, result := range results {
+					if len(result.Errors) > 0 {
+						log.Printf("subscription %s auto update finished with errors: %s", result.Provider, strings.Join(result.Errors, "; "))
+					} else {
+						log.Printf("subscription %s auto updated: parsed=%d imported=%d added=%d updated=%d unchanged=%d", result.Provider, result.Parsed, result.Imported, result.Added, result.Updated, result.Unchanged)
+					}
+				}
+			}
+		}
+	}()
+}
+
+func (m *Manager) dueSubscriptionProviders() []ProxyProviderConfig {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	now := time.Now()
+	providers := make([]ProxyProviderConfig, 0, len(m.cfg.Mihomo.Providers))
+	for _, provider := range m.cfg.Mihomo.Providers {
+		if provider.URL == "" {
+			continue
+		}
+		interval := provider.Interval
+		if interval <= 0 {
+			interval = 3600
+		}
+		last := m.subscriptions[provider.Name]
+		if last.IsZero() || now.Sub(last) >= time.Duration(interval)*time.Second {
+			providers = append(providers, provider)
+			m.subscriptions[provider.Name] = now
+		}
+	}
+	return providers
+}
+
+func (m *Manager) markSubscriptionUpdated(name string) {
+	if name == "" {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.subscriptions[name] = time.Now()
 }
 
 func (m *Manager) UpdateRoutingConfig(routing RoutingConfig) error {
@@ -2133,8 +2223,75 @@ func (m *Manager) findEquivalentOutboundLocked(outbound OutboundConfig) string {
 	return ""
 }
 
+func (m *Manager) findMatchingOutboundLocked(outbound OutboundConfig, provider ProxyProviderConfig) string {
+	switch strings.ToLower(firstNonEmpty(provider.DedupStrategy, "equivalent")) {
+	case "none":
+		return ""
+	case "name":
+		if _, ok := m.outbounds[outbound.Name]; ok {
+			return outbound.Name
+		}
+		return ""
+	default:
+		return m.findEquivalentOutboundLocked(outbound)
+	}
+}
+
+func applyProviderImportOptions(outbound OutboundConfig, provider ProxyProviderConfig, fromSubscription bool) OutboundConfig {
+	if !fromSubscription {
+		return outbound
+	}
+	outbound.Subscription = provider.Name
+	outbound.Group = firstNonEmpty(provider.Group, outbound.Group, provider.Name)
+	if outbound.Name != "" {
+		outbound.Name = provider.RenamePrefix + outbound.Name + provider.RenameSuffix
+	}
+	return outbound
+}
+
+func shouldPreserveUserFields(provider ProxyProviderConfig, fromSubscription bool) bool {
+	if !fromSubscription {
+		return false
+	}
+	return provider.PreserveUserFields || len(provider.PreserveFields) > 0
+}
+
+func mergePreservedOutboundFields(existing OutboundConfig, incoming OutboundConfig, fields []string) OutboundConfig {
+	if len(fields) == 0 {
+		fields = []string{"name", "disabled", "server_name", "skip_cert_verify", "fingerprint", "alpn", "group"}
+	}
+	for _, field := range fields {
+		switch strings.ToLower(strings.TrimSpace(field)) {
+		case "name":
+			incoming.Name = existing.Name
+		case "disabled", "enabled":
+			incoming.Disabled = existing.Disabled
+		case "server_name", "sni":
+			incoming.ServerName = existing.ServerName
+		case "skip_cert_verify", "insecure":
+			incoming.SkipCertVerify = existing.SkipCertVerify
+		case "fingerprint", "fp":
+			incoming.Fingerprint = existing.Fingerprint
+		case "alpn":
+			incoming.ALPN = existing.ALPN
+		case "flow":
+			incoming.Flow = existing.Flow
+		case "transport", "network":
+			incoming.Transport = existing.Transport
+			incoming.Network = existing.Network
+		case "path":
+			incoming.Path = existing.Path
+		case "host":
+			incoming.Host = existing.Host
+		case "group":
+			incoming.Group = existing.Group
+		}
+	}
+	return incoming
+}
+
 func outboundSignature(outbound OutboundConfig) string {
-	return fmt.Sprintf("%s|%s|%d|%s|%s|%s|%s|%s|%s|%s|%s",
+	return fmt.Sprintf("%s|%s|%d|%s|%s|%s|%s|%s|%s|%s",
 		outbound.Protocol,
 		outbound.Address,
 		outbound.Port,
@@ -2142,7 +2299,6 @@ func outboundSignature(outbound OutboundConfig) string {
 		outbound.UUID,
 		outbound.Password,
 		outbound.Method,
-		outbound.ServerName,
 		outbound.PublicKey,
 		outbound.ShortID,
 		outbound.Transport,
