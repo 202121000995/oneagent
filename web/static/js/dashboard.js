@@ -1385,6 +1385,49 @@ document.getElementById("restartServiceButton")?.addEventListener("click", async
   }
 });
 
+const downloadSystemPackage = (url) => {
+  window.location.href = url;
+};
+
+document.getElementById("downloadBackupButton")?.addEventListener("click", () => {
+  downloadSystemPackage("/api/system/backup");
+});
+
+document.getElementById("downloadDiagnosticsButton")?.addEventListener("click", () => {
+  downloadSystemPackage("/api/system/diagnostics");
+});
+
+document.getElementById("restoreBackupForm")?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const output = document.getElementById("backupRestoreResult");
+  const file = form.elements.backup?.files?.[0];
+  if (!file) {
+    setResult(output, "请选择备份 zip 文件", "error");
+    return;
+  }
+  if (!confirm("确定恢复这个备份吗？当前配置会先自动备份。恢复数据库后建议重启 Agent。")) return;
+  const body = new FormData();
+  body.append("backup", file);
+  setResult(output, "恢复中...", "working");
+  try {
+    const response = await fetch("/api/system/restore", { method: "POST", body });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || "恢复失败");
+    setResult(output, [
+      payload.message || "恢复完成",
+      `恢复前备份: ${payload.backup_path || "--"}`,
+      `配置: ${payload.restored_config ? "已恢复" : "未包含"}`,
+      `数据库: ${payload.restored_database ? "已恢复" : "未包含"}`,
+      `证书: ${payload.restored_certs ? "已恢复" : "未包含"}`,
+    ].join("\n"), "success");
+    state.configLoaded = false;
+    await refresh();
+  } catch (error) {
+    setResult(output, error.message, "error");
+  }
+});
+
 document.getElementById("clearImportButton")?.addEventListener("click", () => {
   const text = document.getElementById("importLinksText");
   const result = document.getElementById("importResult");

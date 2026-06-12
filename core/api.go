@@ -156,6 +156,30 @@ func RegisterAPI(mux *http.ServeMux, manager *Manager, auth *Auth) {
 	mux.Handle("GET /api/system/ports", auth.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, ListListeningPorts())
 	})))
+	mux.Handle("GET /api/system/backup", auth.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path, err := CreateBackupPackage()
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		ServePackage(w, r, path)
+	})))
+	mux.Handle("POST /api/system/restore", auth.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		result, err := RestoreBackupPackage(r, manager)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, result)
+	})))
+	mux.Handle("GET /api/system/diagnostics", auth.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path, err := CreateDiagnosticPackage(manager)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		ServePackage(w, r, path)
+	})))
 	mux.Handle("POST /api/system/service/restart", auth.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		result, err := RunServiceAction("restart")
 		if err != nil {

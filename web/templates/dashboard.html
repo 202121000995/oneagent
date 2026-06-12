@@ -251,6 +251,23 @@
         <section class="panel">
           <div class="panel-header">
             <div>
+              <h2>备份、恢复和诊断</h2>
+              <span>备份包含配置、数据库和证书目录；诊断包会自动隐藏敏感字段</span>
+            </div>
+          </div>
+          <div class="button-row compact">
+            <button type="button" class="ghost-button" id="downloadBackupButton">导出备份包</button>
+            <button type="button" class="ghost-button" id="downloadDiagnosticsButton">导出诊断包</button>
+          </div>
+          <form class="form-panel inline-restore" id="restoreBackupForm">
+            <label>恢复备份 zip<input name="backup" type="file" accept=".zip,application/zip"></label>
+            <button type="submit">恢复备份</button>
+          </form>
+          <pre class="preview-box" id="backupRestoreResult"></pre>
+        </section>
+        <section class="panel">
+          <div class="panel-header">
+            <div>
               <h2>离线部署</h2>
               <span>先在本机打包，再上传到 VPS 安装；VPS 不需要访问 GitHub</span>
             </div>
