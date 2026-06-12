@@ -475,6 +475,11 @@ func singBoxInbounds(inbounds []InboundConfig) []map[string]any {
 			base["type"] = "shadowsocks"
 			base["method"] = inbound.Method
 			base["password"] = inbound.Password
+		case "forward-tcp", "forward-udp":
+			base["type"] = "direct"
+			base["network"] = strings.TrimPrefix(inbound.Protocol, "forward-")
+			base["override_address"] = inbound.TargetHost
+			base["override_port"] = inbound.TargetPort
 		default:
 			base["type"] = "mixed"
 		}

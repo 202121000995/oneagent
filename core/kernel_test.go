@@ -17,6 +17,7 @@ func TestSingBoxKernelGenerateConfig(t *testing.T) {
 			{Name: "reality-in", Protocol: "vless", Port: 2082, UUID: "bf000d23-0752-40b4-affe-68f7707a9661", Security: "reality", ServerName: "addons.mozilla.org", PrivateKey: "private", ShortID: "abcd", RealityHandshakeServer: "addons.mozilla.org", RealityHandshakePort: 443},
 			{Name: "anytls-in", Protocol: "anytls", Port: 2083, Password: "secret", TLS: true, ServerName: "example.com", IdleSessionCheck: "30s", IdleSessionTimeout: "30s", MinIdleSession: 5},
 			{Name: "shadowtls-in", Protocol: "shadowtls", Port: 2084, Password: "secret", ServerName: "addons.mozilla.org", RealityHandshakeServer: "addons.mozilla.org", RealityHandshakePort: 443},
+			{Name: "forward-dns", Protocol: "forward-udp", Listen: "0.0.0.0", Port: 5353, TargetHost: "1.1.1.1", TargetPort: 53},
 		},
 		Outbounds: []OutboundConfig{
 			{Name: "remote", Protocol: "vless", Address: "127.0.0.1", Port: 2080, UUID: "bf000d23-0752-40b4-affe-68f7707a9661", TLS: true, ServerName: "example.com", Transport: "tcp"},
@@ -75,6 +76,10 @@ func TestSingBoxKernelGenerateConfig(t *testing.T) {
 	shadowTLSInbound := inbounds[5].(map[string]any)
 	if shadowTLSInbound["type"] != "shadowtls" || shadowTLSInbound["version"] != float64(3) {
 		t.Fatalf("expected shadowtls v3 inbound, got %#v", shadowTLSInbound)
+	}
+	forwardInbound := inbounds[6].(map[string]any)
+	if forwardInbound["type"] != "direct" || forwardInbound["network"] != "udp" || forwardInbound["override_address"] != "1.1.1.1" || forwardInbound["override_port"] != float64(53) {
+		t.Fatalf("expected direct udp forward inbound, got %#v", forwardInbound)
 	}
 	outbounds := cfg["outbounds"].([]any)
 	vless := outbounds[1].(map[string]any)

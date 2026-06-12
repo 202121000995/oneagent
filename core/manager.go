@@ -423,30 +423,34 @@ func (m *Manager) CreateForward(req ForwardCreateRequest) (Node, error) {
 	if req.Protocol == "" {
 		req.Protocol = "tcp"
 	}
+	if req.Protocol != "tcp" && req.Protocol != "udp" {
+		return Node{}, fmt.Errorf("forward protocol must be tcp or udp")
+	}
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if _, exists := m.inbounds[req.Name]; exists {
 		return Node{}, fmt.Errorf("inbound %q already exists", req.Name)
 	}
-	outboundName := req.Name + "-target"
-	if _, exists := m.outbounds[outboundName]; exists {
-		return Node{}, fmt.Errorf("outbound %q already exists", outboundName)
-	}
 
-	inbound := InboundConfig{Name: req.Name, Protocol: "forward-" + req.Protocol, Port: req.ListenPort}
-	outbound := OutboundConfig{Name: outboundName, Protocol: req.Protocol, Address: req.TargetHost, Port: req.TargetPort}
-	rule := RoutingRule{Name: inbound.Name + "-route", Inbound: inbound.Name, Outbound: outbound.Name, Priority: nextRulePriority(m.rules)}
+	inbound := InboundConfig{
+		Name:       req.Name,
+		Protocol:   "forward-" + req.Protocol,
+		Listen:     "0.0.0.0",
+		Port:       req.ListenPort,
+		TargetHost: req.TargetHost,
+		TargetPort: req.TargetPort,
+	}
+	if err := inbound.Validate(); err != nil {
+		return Node{}, err
+	}
+	rule := RoutingRule{Name: inbound.Name + "-route", Inbound: inbound.Name, Outbound: "direct", Priority: nextRulePriority(m.rules)}
 	m.inbounds[inbound.Name] = inbound
-	m.outbounds[outbound.Name] = outbound
 	m.rules = append(m.rules, rule)
 	m.cfg.Inbounds = append(m.cfg.Inbounds, inbound)
-	m.cfg.Outbounds = append(m.cfg.Outbounds, outbound)
 	m.cfg.Routing.Rules = append(m.cfg.Routing.Rules, rule)
 	m.ensureTrafficLocked(inbound.Name)
-	m.ensureTrafficLocked(outbound.Name)
 	m.ensureHealthLocked(inbound.Name, inbound.Disabled)
-	m.ensureHealthLocked(outbound.Name, outbound.Disabled)
 	if err := m.commitLocked(); err != nil {
 		return Node{}, err
 	}

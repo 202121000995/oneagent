@@ -54,6 +54,8 @@ type InboundConfig struct {
 	IdleSessionCheck       string `yaml:"idle_session_check,omitempty" json:"idle_session_check,omitempty"`
 	IdleSessionTimeout     string `yaml:"idle_session_timeout,omitempty" json:"idle_session_timeout,omitempty"`
 	MinIdleSession         int    `yaml:"min_idle_session,omitempty" json:"min_idle_session,omitempty"`
+	TargetHost             string `yaml:"target_host,omitempty" json:"target_host,omitempty"`
+	TargetPort             int    `yaml:"target_port,omitempty" json:"target_port,omitempty"`
 }
 
 type OutboundConfig struct {
@@ -275,6 +277,13 @@ func (i InboundConfig) Validate() error {
 		}
 		if !isSupportedSSMethod(i.Method) {
 			return fmt.Errorf("inbound %q uses unsupported shadowsocks method %q", i.Name, i.Method)
+		}
+	case "forward-tcp", "forward-udp":
+		if i.TargetHost == "" {
+			return fmt.Errorf("inbound %q requires target_host for forwarding", i.Name)
+		}
+		if i.TargetPort < 1 || i.TargetPort > 65535 {
+			return fmt.Errorf("inbound %q requires valid target_port for forwarding", i.Name)
 		}
 	}
 	return nil
