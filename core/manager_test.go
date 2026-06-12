@@ -92,12 +92,38 @@ func TestCreateProxyDoesNotCreateRoutingRule(t *testing.T) {
 }
 
 func TestProbeInboundGoogleUnsupportedProtocol(t *testing.T) {
-	health := probeInboundGoogle(InboundConfig{Name: "vless-in", Protocol: "vless", Port: 443})
+	health := probeHTTPProxyInboundGoogle(InboundConfig{Name: "vless-in", Protocol: "forward-tcp", Port: 443})
 	if health.Status != "unsupported" {
 		t.Fatalf("expected unsupported status, got %#v", health)
 	}
 	if health.LastError == "" {
 		t.Fatal("expected unsupported reason")
+	}
+}
+
+func TestInboundProbeOutboundDerivesRealityPublicKey(t *testing.T) {
+	pair, err := GenerateRealityKeyPair()
+	if err != nil {
+		t.Fatalf("GenerateRealityKeyPair returned error: %v", err)
+	}
+	outbound, err := inboundProbeOutbound(InboundConfig{
+		Name:                   "reality-in",
+		Protocol:               "vless",
+		Listen:                 "0.0.0.0",
+		Port:                   443,
+		UUID:                   "bf000d23-0752-40b4-affe-68f7707a9661",
+		Security:               "reality",
+		ServerName:             "addons.mozilla.org",
+		PrivateKey:             pair.PrivateKey,
+		ShortID:                ",abcd,ef12",
+		RealityHandshakeServer: "addons.mozilla.org",
+		RealityHandshakePort:   443,
+	})
+	if err != nil {
+		t.Fatalf("inboundProbeOutbound returned error: %v", err)
+	}
+	if outbound.PublicKey != pair.PublicKey || outbound.ShortID != "abcd" || outbound.Address != "127.0.0.1" {
+		t.Fatalf("unexpected probe outbound: %#v", outbound)
 	}
 }
 

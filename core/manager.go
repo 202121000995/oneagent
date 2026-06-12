@@ -692,7 +692,7 @@ func (m *Manager) TestNode(nodeType, name string) (NodeTestResult, error) {
 		if !ok {
 			return NodeTestResult{}, fmt.Errorf("inbound %q does not exist", name)
 		}
-		health = probeInboundGoogle(inbound)
+		health = m.probeInboundGoogle(inbound, cfg)
 	case "outbound":
 		_, disabled, outbound, err := m.probeTargetLocked(nodeType, name)
 		m.mu.RUnlock()
@@ -717,7 +717,16 @@ func (m *Manager) TestNode(nodeType, name string) (NodeTestResult, error) {
 	}, nil
 }
 
-func probeInboundGoogle(inbound InboundConfig) Health {
+func (m *Manager) probeInboundGoogle(inbound InboundConfig, cfg Config) Health {
+	if cfg.Kernel.Type == "sing-box" {
+		if executable := firstNonEmpty(cfg.Kernel.Executable, findExecutable("sing-box")); executable != "" {
+			return probeInboundWithSingBox(executable, inbound)
+		}
+	}
+	return probeHTTPProxyInboundGoogle(inbound)
+}
+
+func probeHTTPProxyInboundGoogle(inbound InboundConfig) Health {
 	now := time.Now()
 	if inbound.Disabled {
 		return Health{Status: "disabled", LastError: "node disabled", UpdatedAt: now}
@@ -754,6 +763,146 @@ func probeInboundGoogle(inbound InboundConfig) Health {
 		return Health{Status: "offline", LastError: fmt.Sprintf("Google 链路测试 HTTP 状态异常: %d", resp.StatusCode), UpdatedAt: now}
 	}
 	return Health{Status: "online", LatencyMS: time.Since(start).Milliseconds(), LastError: "Google 链路测试通过", UpdatedAt: now}
+}
+
+func probeInboundWithSingBox(executable string, inbound InboundConfig) Health {
+	now := time.Now()
+	if inbound.Disabled {
+		return Health{Status: "disabled", LastError: "node disabled", UpdatedAt: now}
+	}
+	if inbound.Protocol == "mixed" || inbound.Protocol == "http" {
+		return probeHTTPProxyInboundGoogle(inbound)
+	}
+	outbound, err := inboundProbeOutbound(inbound)
+	if err != nil {
+		return Health{Status: "unsupported", LastError: err.Error(), UpdatedAt: now}
+	}
+	if err := outbound.Validate(); err != nil {
+		return Health{Status: "offline", LastError: "入口客户端参数无效: " + err.Error(), UpdatedAt: now}
+	}
+	port, err := freeLocalPort()
+	if err != nil {
+		return Health{Status: "offline", LastError: "分配本地测试端口失败: " + err.Error(), UpdatedAt: now}
+	}
+	tmpDir, err := os.MkdirTemp("", "nodetools-inbound-test-*")
+	if err != nil {
+		return Health{Status: "offline", LastError: "创建测试目录失败: " + err.Error(), UpdatedAt: now}
+	}
+	defer os.RemoveAll(tmpDir)
+
+	kernel := NewSingBoxKernel()
+	kernel.Configure(KernelConfig{Type: "sing-box", Executable: executable, ConfigPath: filepath.Join(tmpDir, "config.json")})
+	data, err := kernel.GenerateConfig(RuntimeState{
+		Inbounds: []InboundConfig{{
+			Name:     "probe-in",
+			Protocol: "mixed",
+			Listen:   "127.0.0.1",
+			Port:     port,
+		}},
+		Outbounds: []OutboundConfig{outbound},
+		Routing: RoutingConfig{
+			DefaultOutbound: outbound.Name,
+			Rules:           []RoutingRule{{Inbound: "probe-in", Outbound: outbound.Name}},
+		},
+	})
+	if err != nil {
+		return Health{Status: "offline", LastError: "生成入口测试配置失败: " + err.Error(), UpdatedAt: now}
+	}
+	configPath := filepath.Join(tmpDir, "config.json")
+	if err := os.WriteFile(configPath, data, 0o600); err != nil {
+		return Health{Status: "offline", LastError: "写入入口测试配置失败: " + err.Error(), UpdatedAt: now}
+	}
+	if err := kernel.ValidateConfig(configPath); err != nil {
+		return Health{Status: "offline", LastError: "入口测试 sing-box 配置校验失败: " + compactError(err.Error()), UpdatedAt: now}
+	}
+
+	cmd := exec.Command(executable, "run", "-c", configPath)
+	var output strings.Builder
+	cmd.Stdout = &output
+	cmd.Stderr = &output
+	if err := cmd.Start(); err != nil {
+		return Health{Status: "offline", LastError: "启动入口测试进程失败: " + err.Error(), UpdatedAt: now}
+	}
+	defer func() {
+		if cmd.Process != nil {
+			_ = cmd.Process.Kill()
+			_ = cmd.Wait()
+		}
+	}()
+	if err := waitTCP(net.JoinHostPort("127.0.0.1", fmt.Sprintf("%d", port)), 2*time.Second); err != nil {
+		return Health{Status: "offline", LastError: "入口测试代理未启动: " + compactError(output.String()+" "+err.Error()), UpdatedAt: now}
+	}
+
+	proxyURL, _ := url.Parse(fmt.Sprintf("http://127.0.0.1:%d", port))
+	client := &http.Client{
+		Timeout: 10 * time.Second,
+		Transport: &http.Transport{
+			Proxy: http.ProxyURL(proxyURL),
+		},
+	}
+	start := time.Now()
+	resp, err := client.Get("http://www.google.com/generate_204")
+	if err != nil {
+		return Health{Status: "offline", LastError: "入口到 Google 链路测试失败: " + compactError(err.Error()+" "+output.String()), UpdatedAt: now}
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 400 {
+		return Health{Status: "offline", LastError: fmt.Sprintf("入口到 Google 链路测试 HTTP 状态异常: %d", resp.StatusCode), UpdatedAt: now}
+	}
+	return Health{Status: "online", LatencyMS: time.Since(start).Milliseconds(), LastError: "入口到 Google 链路测试通过", UpdatedAt: now}
+}
+
+func inboundProbeOutbound(inbound InboundConfig) (OutboundConfig, error) {
+	outbound := OutboundConfig{
+		Name:           "probe-out",
+		Protocol:       inbound.Protocol,
+		Address:        inboundProbeHost(inbound.Listen),
+		Port:           inbound.Port,
+		Username:       inbound.Username,
+		UUID:           inbound.UUID,
+		Password:       inbound.Password,
+		Method:         inbound.Method,
+		Flow:           inbound.Flow,
+		Security:       inbound.Security,
+		AlterID:        inbound.AlterID,
+		Network:        inbound.Transport,
+		TLS:            inbound.TLS || inbound.Security == "reality" || inbound.ServerName != "",
+		ServerName:     inbound.ServerName,
+		SkipCertVerify: true,
+		Transport:      inbound.Transport,
+		Path:           inbound.Path,
+		Host:           inbound.Host,
+		ShortID:        firstNonEmpty(splitCSV(inbound.ShortID)...),
+	}
+	if outbound.Protocol == "ss" {
+		outbound.Protocol = "shadowsocks"
+	}
+	if outbound.Protocol == "socks5" {
+		outbound.Protocol = "socks"
+	}
+	if outbound.Protocol == "vless" && inbound.Security == "reality" {
+		publicKey, err := publicKeyFromRealityPrivate(inbound.PrivateKey)
+		if err != nil {
+			return OutboundConfig{}, fmt.Errorf("无法从 Reality 私钥推导 public key: %w", err)
+		}
+		outbound.PublicKey = publicKey
+	}
+	switch outbound.Protocol {
+	case "socks", "http", "vless", "vmess", "trojan", "shadowsocks", "shadowtls", "anytls":
+		return outbound, nil
+	default:
+		return OutboundConfig{}, fmt.Errorf("%s 入站暂不支持从入口到 Google 的自动链路测试", inbound.Protocol)
+	}
+}
+
+func inboundProbeHost(listen string) string {
+	host := strings.TrimSpace(listen)
+	switch host {
+	case "", "0.0.0.0", "::", "[::]":
+		return "127.0.0.1"
+	default:
+		return strings.Trim(host, "[]")
+	}
 }
 
 func (m *Manager) probeAllNodes() {
