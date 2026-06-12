@@ -59,6 +59,7 @@ type InboundConfig struct {
 }
 
 type OutboundConfig struct {
+	OriginalName   string `yaml:"-" json:"original_name,omitempty"`
 	Name           string `yaml:"name" json:"name"`
 	Protocol       string `yaml:"protocol" json:"protocol"`
 	Address        string `yaml:"address" json:"address"`

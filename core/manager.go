@@ -497,6 +497,8 @@ func (m *Manager) UpsertInbound(inbound InboundConfig) (Node, error) {
 }
 
 func (m *Manager) UpsertOutbound(outbound OutboundConfig) (Node, error) {
+	originalName := outbound.OriginalName
+	outbound.OriginalName = ""
 	if outbound.Name == "" {
 		return Node{}, fmt.Errorf("name is required")
 	}
@@ -512,6 +514,29 @@ func (m *Manager) UpsertOutbound(outbound OutboundConfig) (Node, error) {
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if originalName != "" && originalName != outbound.Name {
+		if _, ok := m.outbounds[originalName]; !ok {
+			return Node{}, fmt.Errorf("outbound %q does not exist", originalName)
+		}
+		if _, exists := m.outbounds[outbound.Name]; exists {
+			return Node{}, fmt.Errorf("outbound %q already exists", outbound.Name)
+		}
+		delete(m.outbounds, originalName)
+		m.cfg.Outbounds = deleteOutboundConfig(m.cfg.Outbounds, originalName)
+		m.rules = renameRoutingOutbound(m.rules, originalName, outbound.Name)
+		m.cfg.Routing.Rules = renameRoutingOutbound(m.cfg.Routing.Rules, originalName, outbound.Name)
+		if m.cfg.Routing.DefaultOutbound == originalName {
+			m.cfg.Routing.DefaultOutbound = outbound.Name
+		}
+		if traffic, ok := m.traffic[originalName]; ok {
+			m.traffic[outbound.Name] = traffic
+			delete(m.traffic, originalName)
+		}
+		if health, ok := m.health[originalName]; ok {
+			m.health[outbound.Name] = health
+			delete(m.health, originalName)
+		}
+	}
 	m.outbounds[outbound.Name] = outbound
 	m.cfg.Outbounds = upsertOutboundConfig(m.cfg.Outbounds, outbound)
 	m.ensureTrafficLocked(outbound.Name)
@@ -1172,6 +1197,16 @@ func deleteRulesForNode(items []RoutingRule, nodeType, name string) []RoutingRul
 			continue
 		}
 		next = append(next, item)
+	}
+	return next
+}
+
+func renameRoutingOutbound(items []RoutingRule, oldName, newName string) []RoutingRule {
+	next := append([]RoutingRule(nil), items...)
+	for i := range next {
+		if next[i].Outbound == oldName {
+			next[i].Outbound = newName
+		}
 	}
 	return next
 }

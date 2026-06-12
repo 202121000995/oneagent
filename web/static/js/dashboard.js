@@ -351,6 +351,7 @@ const getRules = () => state.config?.routing?.rules || [];
 const getOutbounds = () => state.nodes.filter((node) => node.type === "outbound");
 const getInbounds = () => state.nodes.filter((node) => node.type === "inbound");
 const getInboundConfig = (name) => (state.config?.inbounds || []).find((item) => item.name === name);
+const getOutboundConfig = (name) => (state.config?.outbounds || []).find((item) => item.name === name);
 
 async function refresh() {
   const [statusRes, nodeRes, configRes, kernelsRes, serviceRes, envRes, portsRes] = await Promise.all([
@@ -468,6 +469,7 @@ const renderOutbounds = () => {
       <td>
         <div class="row-actions">
           <button class="icon-button" data-test-type="outbound" data-test-name="${escapeHTML(node.name)}" type="button">连通测试</button>
+          <button class="icon-button" data-edit-outbound="${escapeHTML(node.name)}" type="button">编辑</button>
           <button class="icon-button" data-share-outbound="${escapeHTML(node.name)}" type="button">分享</button>
           <button class="icon-button" data-toggle-type="outbound" data-toggle-name="${escapeHTML(node.name)}" data-toggle-enabled="${node.enabled ? "false" : "true"}" type="button">${node.enabled ? "停用" : "启用"}</button>
           <button class="icon-button" data-delete-type="outbound" data-delete-name="${escapeHTML(node.name)}" type="button">删除</button>
@@ -794,6 +796,20 @@ const openInboundEditor = (name) => {
   openModal("inboundModal");
 };
 
+const openOutboundEditor = (name) => {
+  const form = document.getElementById("outboundForm");
+  const outbound = getOutboundConfig(name);
+  if (!form || !outbound) return;
+  form.reset();
+  form.elements.original_name.value = outbound.name;
+  const title = document.getElementById("outboundModalTitle");
+  if (title) title.textContent = "编辑出站";
+  document.getElementById("outboundProtocolSelect").value = outbound.protocol;
+  openModal("outboundModal");
+  renderOutboundFields(outbound);
+  fillForm(form, outbound);
+};
+
 const closeModal = () => {
   document.getElementById("modalBackdrop")?.setAttribute("hidden", "");
   document.querySelectorAll(".modal").forEach((item) => item.hidden = true);
@@ -840,12 +856,13 @@ const renderOutboundProtocolOptions = () => {
   select.innerHTML = outboundProtocols.map((protocol) => `<option value="${protocol}">${protocol}</option>`).join("");
 };
 
-const renderOutboundFields = () => {
+const renderOutboundFields = (values = {}) => {
   const select = document.getElementById("outboundProtocolSelect");
   const container = document.getElementById("outboundDynamicFields");
   if (!select || !container) return;
-  const protocol = select.value || "vless";
-  container.innerHTML = (outboundSchemas[protocol] || outboundSchemas.vless).map(fieldControl).join("");
+  const protocol = values.protocol || select.value || "vless";
+  select.value = protocol;
+  container.innerHTML = (outboundSchemas[protocol] || outboundSchemas.vless).map((field) => fieldControl(field, values)).join("");
 };
 
 const showShareLink = async (name, link) => {
@@ -963,7 +980,15 @@ document.getElementById("openBatchInboundModalButton")?.addEventListener("click"
   if (result) result.textContent = "";
   openModal("batchInboundModal");
 });
-document.getElementById("openOutboundModalButton")?.addEventListener("click", () => openModal("outboundModal"));
+document.getElementById("openOutboundModalButton")?.addEventListener("click", () => {
+  const form = document.getElementById("outboundForm");
+  form?.reset();
+  if (form?.elements.original_name) form.elements.original_name.value = "";
+  const title = document.getElementById("outboundModalTitle");
+  if (title) title.textContent = "手动添加出站";
+  renderOutboundFields();
+  openModal("outboundModal");
+});
 document.querySelectorAll("[data-close-modal]").forEach((button) => button.addEventListener("click", closeModal));
 document.getElementById("modalBackdrop")?.addEventListener("click", (event) => {
   if (event.target.id === "modalBackdrop") closeModal();
@@ -1156,7 +1181,8 @@ document.getElementById("generateRealityKeyButton")?.addEventListener("click", a
 
 document.getElementById("inboundForm")?.addEventListener("submit", async (event) => {
   event.preventDefault();
-  const data = formToObject(event.currentTarget);
+  const form = event.currentTarget;
+  const data = formToObject(form);
   const editing = Boolean(data.original_name);
   delete data.original_name;
   delete data.share_host;
@@ -1170,7 +1196,7 @@ document.getElementById("inboundForm")?.addEventListener("submit", async (event)
     } else {
       await postJSON("/api/proxy/create", data);
     }
-    event.currentTarget.reset();
+    form.reset();
     closeModal();
     await refresh();
   } catch (error) {
@@ -1218,10 +1244,11 @@ document.getElementById("batchInboundForm")?.addEventListener("submit", async (e
 
 document.getElementById("outboundForm")?.addEventListener("submit", async (event) => {
   event.preventDefault();
-  const data = formToObject(event.currentTarget);
+  const form = event.currentTarget;
+  const data = formToObject(form);
   try {
     await sendJSON("/api/outbounds", "PUT", data);
-    event.currentTarget.reset();
+    form.reset();
     renderOutboundFields();
     closeModal();
     await refresh();
@@ -1340,6 +1367,12 @@ document.addEventListener("click", async (event) => {
   const editInboundButton = event.target.closest("[data-edit-inbound]");
   if (editInboundButton) {
     openInboundEditor(editInboundButton.dataset.editInbound);
+    return;
+  }
+
+  const editOutboundButton = event.target.closest("[data-edit-outbound]");
+  if (editOutboundButton) {
+    openOutboundEditor(editOutboundButton.dataset.editOutbound);
     return;
   }
 
