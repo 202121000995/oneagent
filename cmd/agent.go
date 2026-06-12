@@ -34,9 +34,9 @@ func main() {
 	}
 	if cfg.Server.AdminPass != "" {
 		cfg.Server.AdminPass = ""
-		if err := core.SaveConfig("config.yaml", cfg); err != nil {
-			log.Printf("clear admin password from config failed: %v", err)
-		}
+	}
+	if err := core.SaveConfig("config.yaml", cfg); err != nil {
+		log.Printf("save normalized config failed: %v", err)
 	}
 
 	manager := core.NewManager(db, "config.yaml")
