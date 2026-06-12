@@ -391,6 +391,17 @@ const setText = (id, value) => {
   if (element) element.textContent = value;
 };
 
+const setResult = (element, value, type = "info") => {
+  if (!element) return;
+  element.classList.remove("result-working", "result-success", "result-error");
+  const text = String(value ?? "");
+  element.textContent = text;
+  element.hidden = text.trim() === "";
+  if (!element.hidden) {
+    element.classList.add(`result-${type}`);
+  }
+};
+
 const getRules = () => state.config?.routing?.rules || [];
 const getOutbounds = () => state.nodes.filter((node) => node.type === "outbound");
 const getInbounds = () => state.nodes.filter((node) => node.type === "inbound");
@@ -919,7 +930,7 @@ const saveMihomoConfig = async () => {
 const renderSubscriptionUpdateResult = (payload) => {
   const output = document.getElementById("subscriptionPreview");
   const lines = subscriptionResultLines(payload);
-  if (output) output.textContent = lines.join("\n") || "没有可更新的订阅";
+  setResult(output, lines.join("\n") || "没有可更新的订阅", "success");
 };
 
 const subscriptionResultLines = (payload) => (payload.results || []).flatMap((item) => [
@@ -1354,34 +1365,34 @@ document.getElementById("clearImportButton")?.addEventListener("click", () => {
   const text = document.getElementById("importLinksText");
   const result = document.getElementById("importResult");
   if (text) text.value = "";
-  if (result) result.textContent = "";
+  setResult(result, "");
 });
 
 document.getElementById("importOutboundsButton")?.addEventListener("click", async () => {
   const text = document.getElementById("importLinksText")?.value || "";
   const result = document.getElementById("importResult");
-  if (result) result.textContent = "解析中...";
+  setResult(result, "解析中...", "working");
   try {
     const payload = await postJSON("/api/outbounds/import", { text });
-    if (result) result.textContent = importResultLines(payload).join("\n");
+    setResult(result, importResultLines(payload).join("\n"), "success");
     state.configLoaded = false;
     await refresh();
   } catch (error) {
-    if (result) result.textContent = error.message;
+    setResult(result, error.message, "error");
   }
 });
 
 document.getElementById("updateSubscriptionsButton")?.addEventListener("click", async () => {
   const result = document.getElementById("importResult");
-  if (result) result.textContent = "更新订阅中...";
+  setResult(result, "更新订阅中...", "working");
   try {
     const payload = await postJSON("/api/subscriptions/update", {});
     const lines = subscriptionResultLines(payload);
-    if (result) result.textContent = lines.join("\n") || "没有可更新的订阅";
+    setResult(result, lines.join("\n") || "没有可更新的订阅", "success");
     state.configLoaded = false;
     await refresh();
   } catch (error) {
-    if (result) result.textContent = error.message;
+    setResult(result, error.message, "error");
   }
 });
 
@@ -1440,7 +1451,7 @@ document.getElementById("batchInboundForm")?.addEventListener("submit", async (e
   const protocols = selectedBatchProtocols(form);
   const output = document.getElementById("batchInboundResult");
   if (protocols.length === 0) {
-    if (output) output.textContent = "请至少选择一个协议";
+    setResult(output, "请至少选择一个协议", "error");
     return;
   }
   const data = formToObject(form);
@@ -1457,13 +1468,13 @@ document.getElementById("batchInboundForm")?.addEventListener("submit", async (e
       const payload = await buildBatchInboundPayload(protocols[index], { ...base, port: base.port + index });
       await postJSON("/api/proxy/create", payload);
       lines.push(`${payload.name}: ${payload.protocol} / ${payload.listen}:${payload.port}`);
-      if (output) output.textContent = lines.join("\n");
+      setResult(output, lines.join("\n"), "working");
     }
     state.configLoaded = false;
     await refresh();
-    if (output) output.textContent = `${lines.join("\n")}\n\n批量搭建完成。可在入站列表逐个点击分享查看链接和二维码。`;
+    setResult(output, `${lines.join("\n")}\n\n批量搭建完成。可在入站列表逐个点击分享查看链接和二维码。`, "success");
   } catch (error) {
-    if (output) output.textContent = `${lines.join("\n")}\n错误: ${error.message}`;
+    setResult(output, `${lines.join("\n")}\n错误: ${error.message}`, "error");
   }
 });
 
@@ -1515,7 +1526,7 @@ document.getElementById("mihomoForm")?.addEventListener("submit", async (event) 
   try {
     await saveMihomoConfig();
     const output = document.getElementById("subscriptionPreview");
-    if (output) output.textContent = "订阅设置已保存。需要导入节点时点击“保存并拉取节点”。";
+    setResult(output, "订阅设置已保存。需要导入节点时点击“保存并拉取节点”。", "success");
     await refresh();
   } catch (error) {
     alert(error.message);
@@ -1524,7 +1535,7 @@ document.getElementById("mihomoForm")?.addEventListener("submit", async (event) 
 
 document.getElementById("saveAndUpdateSubscriptionButton")?.addEventListener("click", async () => {
   const output = document.getElementById("subscriptionPreview");
-  if (output) output.textContent = "保存并拉取节点中...";
+  setResult(output, "保存并拉取节点中...", "working");
   try {
     await saveMihomoConfig();
     const payload = await postJSON("/api/subscriptions/update", {});
@@ -1532,9 +1543,9 @@ document.getElementById("saveAndUpdateSubscriptionButton")?.addEventListener("cl
     await refresh();
     showPage("outbounds");
     const result = document.getElementById("importResult");
-    if (result) result.textContent = subscriptionResultLines(payload).join("\n") || "没有可更新的订阅";
+    setResult(result, subscriptionResultLines(payload).join("\n") || "没有可更新的订阅", "success");
   } catch (error) {
-    if (output) output.textContent = error.message;
+    setResult(output, error.message, "error");
   }
 });
 
@@ -1558,7 +1569,7 @@ document.getElementById("routingForm")?.addEventListener("submit", async (event)
 
 document.getElementById("previewRoutingButton")?.addEventListener("click", async () => {
   const output = document.getElementById("routingPreviewOutput");
-  if (output) output.textContent = "预览中...";
+  setResult(output, "预览中...", "working");
   try {
     const payload = await postJSON("/api/routing/preview", {
       inbound: document.getElementById("routingPreviewInbound")?.value || "",
@@ -1567,27 +1578,27 @@ document.getElementById("previewRoutingButton")?.addEventListener("click", async
       port: Number(document.getElementById("routingPreviewPort")?.value || 443),
     });
     if (output) {
-      output.textContent = [
+      setResult(output, [
         `模式: ${payload.mode}`,
         `最终出站: ${payload.outbound}`,
         `原因: ${payload.reason}`,
         payload.matched_rule ? `命中规则: ${payload.matched_rule} / ${payload.match_type}=${payload.value} / 优先级 ${payload.priority}` : "",
         ...((payload.warnings || []).map((warning) => `提示: ${warning}`)),
-      ].filter(Boolean).join("\n");
+      ].filter(Boolean).join("\n"), "success");
     }
   } catch (error) {
-    if (output) output.textContent = error.message;
+    setResult(output, error.message, "error");
   }
 });
 
 document.getElementById("previewSubscriptionButton")?.addEventListener("click", async () => {
   const output = document.getElementById("subscriptionPreview");
   const url = document.getElementById("mihomoForm")?.elements.provider_url.value || "";
-  if (output) output.textContent = "解析中...";
+  setResult(output, "解析中...", "working");
   try {
     const preview = await postJSON("/api/subscription/preview", { url });
     if (output) {
-      output.textContent = [
+      setResult(output, [
         `格式: ${preview.format}`,
         `节点: ${preview.proxy_count}`,
         `代理组: ${preview.group_count}`,
@@ -1596,10 +1607,10 @@ document.getElementById("previewSubscriptionButton")?.addEventListener("click", 
         `节点名称: ${(preview.proxy_names || []).slice(0, 12).join(", ") || "--"}`,
         `代理组名称: ${(preview.group_names || []).join(", ") || "--"}`,
         ...(preview.warnings || []).map((item) => `提示: ${item}`),
-      ].join("\n");
+      ].join("\n"), "success");
     }
   } catch (error) {
-    if (output) output.textContent = error.message;
+    setResult(output, error.message, "error");
   }
 });
 
@@ -1630,14 +1641,14 @@ document.addEventListener("click", async (event) => {
   const inspectOutboundButton = event.target.closest("[data-inspect-outbound]");
   if (inspectOutboundButton) {
     const output = document.getElementById("outboundDiagnostics");
-    if (output) output.textContent = "检查中...";
+    setResult(output, "检查中...", "working");
     try {
       const response = await fetch(`/api/outbounds/${encodeURIComponent(inspectOutboundButton.dataset.inspectOutbound)}/inspect`);
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.error || "检查失败");
-      if (output) output.textContent = inspectionLines(payload).join("\n");
+      setResult(output, inspectionLines(payload).join("\n"), "success");
     } catch (error) {
-      if (output) output.textContent = error.message;
+      setResult(output, error.message, "error");
     }
     return;
   }

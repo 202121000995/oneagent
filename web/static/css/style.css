@@ -10,6 +10,8 @@
   --nav: #071b2c;
   --nav-active: #16877d;
   --danger: #a23b2a;
+  --success: #157347;
+  --info: #28618f;
   --shadow: 0 10px 24px rgba(24, 35, 43, 0.08);
 }
 
@@ -506,8 +508,44 @@ button:hover {
   max-width: 360px;
 }
 
-.preview-box,
-pre {
+.preview-box {
+  min-height: 120px;
+  max-height: 360px;
+  margin: 0;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 16px 18px;
+  background: #f8fbfc;
+  color: var(--ink);
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+}
+
+.preview-box:empty {
+  display: none;
+}
+
+.preview-box.result-working {
+  border-color: rgba(40, 97, 143, 0.25);
+  background: rgba(40, 97, 143, 0.08);
+  color: var(--info);
+}
+
+.preview-box.result-success {
+  border-color: rgba(21, 115, 71, 0.25);
+  background: rgba(21, 115, 71, 0.08);
+  color: var(--success);
+}
+
+.preview-box.result-error {
+  border-color: rgba(162, 59, 42, 0.26);
+  background: rgba(162, 59, 42, 0.08);
+  color: var(--danger);
+}
+
+#logOutput {
   min-height: 120px;
   max-height: 360px;
   margin: 0;
