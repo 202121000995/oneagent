@@ -823,17 +823,17 @@ func addTLS(target map[string]any, outbound OutboundConfig) {
 	if outbound.ALPN != "" {
 		tls["alpn"] = splitCSV(outbound.ALPN)
 	}
-	if outbound.Fingerprint != "" {
-		tls["utls"] = map[string]any{"enabled": true, "fingerprint": outbound.Fingerprint}
-	}
 	if outbound.SkipCertVerify {
 		tls["insecure"] = true
 	}
 	if outbound.Security == "reality" || outbound.PublicKey != "" {
+		tls["utls"] = map[string]any{"enabled": true, "fingerprint": firstNonEmpty(outbound.Fingerprint, "chrome")}
 		reality := map[string]any{"enabled": true}
 		addOptional(reality, "public_key", outbound.PublicKey)
 		addOptional(reality, "short_id", outbound.ShortID)
 		tls["reality"] = reality
+	} else if outbound.Fingerprint != "" {
+		tls["utls"] = map[string]any{"enabled": true, "fingerprint": outbound.Fingerprint}
 	}
 	target["tls"] = tls
 }

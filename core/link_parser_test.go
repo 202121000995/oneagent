@@ -29,6 +29,11 @@ http2://Y2JmMzc4ZWYtYmJmOC00NTM5LWE1NjQtMzFjNmYwMTczMTQyOmNiZjM3OGVmLWJiZjgtNDUz
 			t.Fatalf("missing protocol %s in %#v", protocol, outbounds)
 		}
 	}
+	for _, outbound := range outbounds {
+		if outbound.Protocol == "vless" && outbound.Port == 8881 && outbound.Flow != "xtls-rprx-vision" {
+			t.Fatalf("expected vless xtls flow to be preserved, got %#v", outbound)
+		}
+	}
 }
 
 func TestParseOutboundLinksSupportsV2rayNJSON(t *testing.T) {

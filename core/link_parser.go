@@ -259,6 +259,7 @@ func parseOutboundLink(raw string) (OutboundConfig, error) {
 		Address:      host,
 		Port:         port,
 		Raw:          raw,
+		Flow:         firstNonEmpty(query.Get("flow"), xtlsFlow(query.Get("xtls"))),
 		ServerName:   firstNonEmpty(query.Get("peer"), query.Get("sni"), query.Get("servername"), query.Get("host")),
 		PublicKey:    firstNonEmpty(query.Get("pbk"), query.Get("public-key"), query.Get("public_key")),
 		ShortID:      firstNonEmpty(query.Get("sid"), query.Get("short-id"), query.Get("short_id")),
@@ -357,6 +358,7 @@ func parseJSONShare(protocol string, payload string, raw string) (OutboundConfig
 		Username:    stringValue(data["Username"]),
 		UUID:        firstNonEmpty(stringValue(data["id"]), stringValue(data["uuid"])),
 		Password:    firstNonEmpty(stringValue(data["Password"]), stringValue(data["password"])),
+		Flow:        firstNonEmpty(stringValue(data["Flow"]), stringValue(data["flow"])),
 		Security:    firstNonEmpty(stringValue(data["StreamSecurity"]), stringValue(data["security"]), stringValue(data["scy"])),
 		ServerName:  firstNonEmpty(stringValue(data["Sni"]), stringValue(data["sni"]), stringValue(data["servername"])),
 		Fingerprint: firstNonEmpty(stringValue(data["Fingerprint"]), stringValue(data["fp"])),
@@ -451,6 +453,17 @@ func normalizeYAMLProtocol(value string) string {
 		return "socks"
 	default:
 		return value
+	}
+}
+
+func xtlsFlow(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "2", "vision", "xtls-rprx-vision":
+		return "xtls-rprx-vision"
+	case "1", "direct", "xtls-rprx-direct":
+		return "xtls-rprx-direct"
+	default:
+		return strings.TrimSpace(value)
 	}
 }
 

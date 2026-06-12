@@ -91,6 +91,41 @@ func TestCreateProxyDoesNotCreateRoutingRule(t *testing.T) {
 	}
 }
 
+func TestApplyConfigEnrichesOutboundFromRawFlow(t *testing.T) {
+	db, err := InitDatabase(filepath.Join(t.TempDir(), "nodetools.db"))
+	if err != nil {
+		t.Fatalf("InitDatabase returned error: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	manager := NewManager(db, "")
+	cfg := Config{
+		Outbounds: []OutboundConfig{{
+			Name:      "raw-reality",
+			Protocol:  "vless",
+			Address:   "45.139.193.187",
+			Port:      8881,
+			UUID:      "cbf378ef-bbf8-4539-a564-31c6f0173142",
+			Security:  "reality",
+			TLS:       true,
+			PublicKey: "pub",
+			Raw:       "vless://cbf378ef-bbf8-4539-a564-31c6f0173142@45.139.193.187:8881?security=reality&sni=addons.mozilla.org&pbk=pub&type=tcp&flow=xtls-rprx-vision&encryption=none#raw-reality",
+		}},
+		Routing: RoutingConfig{Mode: "global", DefaultOutbound: "raw-reality"},
+	}
+	cfg.Server.WebPort = 8080
+	cfg.Server.AdminUser = "admin"
+	cfg.Server.AdminPass = "password123"
+	if err := manager.ApplyConfig(cfg); err != nil {
+		t.Fatalf("ApplyConfig returned error: %v", err)
+	}
+
+	snapshot := manager.ConfigSnapshot()
+	if len(snapshot.Outbounds) != 1 || snapshot.Outbounds[0].Flow != "xtls-rprx-vision" || snapshot.Outbounds[0].ServerName != "addons.mozilla.org" {
+		t.Fatalf("expected outbound to be enriched from raw link, got %#v", snapshot.Outbounds)
+	}
+}
+
 func TestProbeInboundGoogleUnsupportedProtocol(t *testing.T) {
 	health := probeHTTPProxyInboundGoogle(InboundConfig{Name: "vless-in", Protocol: "forward-tcp", Port: 443})
 	if health.Status != "unsupported" {

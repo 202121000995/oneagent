@@ -20,7 +20,7 @@ func TestSingBoxKernelGenerateConfig(t *testing.T) {
 			{Name: "forward-dns", Protocol: "forward-udp", Listen: "0.0.0.0", Port: 5353, TargetHost: "1.1.1.1", TargetPort: 53},
 		},
 		Outbounds: []OutboundConfig{
-			{Name: "remote", Protocol: "vless", Address: "127.0.0.1", Port: 2080, UUID: "bf000d23-0752-40b4-affe-68f7707a9661", TLS: true, ServerName: "example.com", Transport: "tcp"},
+			{Name: "remote", Protocol: "vless", Address: "127.0.0.1", Port: 2080, UUID: "bf000d23-0752-40b4-affe-68f7707a9661", Flow: "xtls-rprx-vision", Security: "reality", TLS: true, ServerName: "example.com", PublicKey: "reality-public-key", Transport: "tcp"},
 			{Name: "ss", Protocol: "shadowsocks", Address: "127.0.0.1", Port: 2081, Method: "aes-128-gcm", Password: "secret"},
 			{Name: "socks-auth", Protocol: "socks5", Address: "127.0.0.1", Port: 2082, Username: "user", Password: "pass"},
 		},
@@ -100,6 +100,13 @@ func TestSingBoxKernelGenerateConfig(t *testing.T) {
 	vless := outbounds[1].(map[string]any)
 	if vless["type"] != "vless" || vless["uuid"] == "" {
 		t.Fatalf("expected vless outbound with uuid, got %#v", vless)
+	}
+	if vless["flow"] != "xtls-rprx-vision" {
+		t.Fatalf("expected vless outbound flow, got %#v", vless)
+	}
+	vlessTLS := vless["tls"].(map[string]any)
+	if vlessTLS["utls"].(map[string]any)["fingerprint"] != "chrome" || vlessTLS["reality"] == nil {
+		t.Fatalf("expected reality outbound to default uTLS chrome, got %#v", vlessTLS)
 	}
 	if _, ok := vless["transport"]; ok {
 		t.Fatalf("tcp transport should be omitted for sing-box outbound, got %#v", vless)

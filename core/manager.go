@@ -108,6 +108,9 @@ func NewManager(db *sql.DB, configPath string) *Manager {
 }
 
 func (m *Manager) ApplyConfig(cfg Config) error {
+	for i := range cfg.Outbounds {
+		cfg.Outbounds[i] = enrichOutboundFromRaw(cfg.Outbounds[i])
+	}
 	if err := cfg.Validate(); err != nil {
 		return err
 	}
@@ -148,6 +151,33 @@ func (m *Manager) ApplyConfig(cfg Config) error {
 	InitOutbounds(cfg.Outbounds)
 	InitRoutes(cfg.Routing.Rules)
 	return nil
+}
+
+func enrichOutboundFromRaw(outbound OutboundConfig) OutboundConfig {
+	if !strings.Contains(outbound.Raw, "://") {
+		return outbound
+	}
+	parsed, err := parseOutboundLink(outbound.Raw)
+	if err != nil {
+		return outbound
+	}
+	outbound.Flow = firstNonEmpty(outbound.Flow, parsed.Flow)
+	outbound.Security = firstNonEmpty(outbound.Security, parsed.Security)
+	outbound.ServerName = firstNonEmpty(outbound.ServerName, parsed.ServerName)
+	outbound.PublicKey = firstNonEmpty(outbound.PublicKey, parsed.PublicKey)
+	outbound.ShortID = firstNonEmpty(outbound.ShortID, parsed.ShortID)
+	outbound.Fingerprint = firstNonEmpty(outbound.Fingerprint, parsed.Fingerprint)
+	outbound.Transport = firstNonEmpty(outbound.Transport, parsed.Transport)
+	outbound.Path = firstNonEmpty(outbound.Path, parsed.Path)
+	outbound.Host = firstNonEmpty(outbound.Host, parsed.Host)
+	outbound.ALPN = firstNonEmpty(outbound.ALPN, parsed.ALPN)
+	if !outbound.TLS {
+		outbound.TLS = parsed.TLS
+	}
+	if !outbound.SkipCertVerify {
+		outbound.SkipCertVerify = parsed.SkipCertVerify
+	}
+	return outbound
 }
 
 func (m *Manager) Stop() {
