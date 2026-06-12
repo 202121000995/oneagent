@@ -116,6 +116,34 @@ func RegisterAPI(mux *http.ServeMux, manager *Manager, auth *Auth) {
 	mux.Handle("GET /api/config", auth.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, manager.ConfigSnapshot())
 	})))
+	mux.Handle("GET /api/config/history", auth.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		entries, err := manager.ListConfigHistory(parsePositiveInt(r.URL.Query().Get("limit"), 20))
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"history": entries})
+	})))
+	mux.Handle("POST /api/config/history/{id}/restore", auth.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "valid config history id is required")
+			return
+		}
+		if err := manager.RestoreConfigHistory(id); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"status": "restored", "config": manager.ConfigSnapshot()})
+	})))
+	mux.Handle("DELETE /api/config/history/cleanup", auth.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		deleted, err := manager.CleanupConfigHistory(parsePositiveInt(r.URL.Query().Get("keep"), 100))
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"deleted": deleted})
+	})))
 	mux.Handle("GET /api/system/kernels", auth.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"kernels": DetectKernels(manager.ConfigSnapshot())})
 	})))
@@ -387,14 +415,10 @@ func RegisterAPI(mux *http.ServeMux, manager *Manager, auth *Auth) {
 			writeError(w, http.StatusBadRequest, "invalid json body")
 			return
 		}
-		nodes := make([]Node, 0, len(req.Items))
-		for _, item := range req.Items {
-			node, err := manager.SetNodeEnabled(item.Type, item.Name, req.Enabled)
-			if err != nil {
-				writeError(w, http.StatusBadRequest, err.Error())
-				return
-			}
-			nodes = append(nodes, node)
+		nodes, err := manager.SetNodesEnabled(req.Items, req.Enabled)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"nodes": nodes})
 	})))
@@ -404,13 +428,12 @@ func RegisterAPI(mux *http.ServeMux, manager *Manager, auth *Auth) {
 			writeError(w, http.StatusBadRequest, "invalid json body")
 			return
 		}
-		for _, item := range req.Items {
-			if err := manager.DeleteNode(item.Type, item.Name); err != nil {
-				writeError(w, http.StatusBadRequest, err.Error())
-				return
-			}
+		deleted, err := manager.DeleteNodes(req.Items)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"deleted": len(req.Items)})
+		writeJSON(w, http.StatusOK, map[string]any{"deleted": deleted})
 	})))
 	mux.Handle("DELETE /api/nodes/{type}/{name}", auth.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if err := manager.DeleteNode(r.PathValue("type"), r.PathValue("name")); err != nil {

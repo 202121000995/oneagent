@@ -64,6 +64,24 @@ type Manager struct {
 	health    map[string]Health
 }
 
+type managerSnapshot struct {
+	kernel    Kernel
+	cfg       Config
+	inbounds  map[string]InboundConfig
+	outbounds map[string]OutboundConfig
+	rules     []RoutingRule
+	traffic   map[string]*Traffic
+	health    map[string]Health
+}
+
+type ConfigHistoryEntry struct {
+	ID        int64  `json:"id"`
+	CreatedAt string `json:"created_at"`
+	Summary   string `json:"summary"`
+}
+
+const defaultConfigHistoryKeep = 100
+
 type Traffic struct {
 	UploadBytes   int64
 	DownloadBytes int64
@@ -166,6 +184,76 @@ func NewManager(db *sql.DB, configPath string) *Manager {
 	}
 }
 
+func cloneConfig(cfg Config) Config {
+	next := cfg
+	next.Inbounds = append([]InboundConfig(nil), cfg.Inbounds...)
+	next.Outbounds = append([]OutboundConfig(nil), cfg.Outbounds...)
+	next.Routing.Rules = append([]RoutingRule(nil), cfg.Routing.Rules...)
+	next.Mihomo.Rules = append([]string(nil), cfg.Mihomo.Rules...)
+	next.Mihomo.Providers = append([]ProxyProviderConfig(nil), cfg.Mihomo.Providers...)
+	next.Mihomo.ProxyGroups = make([]ProxyGroupConfig, len(cfg.Mihomo.ProxyGroups))
+	for i, group := range cfg.Mihomo.ProxyGroups {
+		next.Mihomo.ProxyGroups[i] = group
+		next.Mihomo.ProxyGroups[i].Proxies = append([]string(nil), group.Proxies...)
+		next.Mihomo.ProxyGroups[i].Use = append([]string(nil), group.Use...)
+	}
+	return next
+}
+
+func (m *Manager) snapshotLocked() managerSnapshot {
+	inbounds := make(map[string]InboundConfig, len(m.inbounds))
+	for name, item := range m.inbounds {
+		inbounds[name] = item
+	}
+	outbounds := make(map[string]OutboundConfig, len(m.outbounds))
+	for name, item := range m.outbounds {
+		outbounds[name] = item
+	}
+	traffic := make(map[string]*Traffic, len(m.traffic))
+	for name, item := range m.traffic {
+		if item == nil {
+			continue
+		}
+		next := *item
+		traffic[name] = &next
+	}
+	health := make(map[string]Health, len(m.health))
+	for name, item := range m.health {
+		health[name] = item
+	}
+	return managerSnapshot{
+		kernel:    m.kernel,
+		cfg:       cloneConfig(m.cfg),
+		inbounds:  inbounds,
+		outbounds: outbounds,
+		rules:     append([]RoutingRule(nil), m.rules...),
+		traffic:   traffic,
+		health:    health,
+	}
+}
+
+func (m *Manager) restoreLocked(snapshot managerSnapshot) {
+	m.kernel = snapshot.kernel
+	m.cfg = cloneConfig(snapshot.cfg)
+	m.inbounds = snapshot.inbounds
+	m.outbounds = snapshot.outbounds
+	m.rules = append([]RoutingRule(nil), snapshot.rules...)
+	m.traffic = snapshot.traffic
+	m.health = snapshot.health
+}
+
+func (m *Manager) commitWithRollbackLocked(snapshot managerSnapshot) error {
+	if err := m.commitLocked(); err != nil {
+		m.restoreLocked(snapshot)
+		if rollbackErr := m.applyKernelLocked(); rollbackErr != nil {
+			log.Printf("rollback kernel apply failed: %v", rollbackErr)
+			return fmt.Errorf("%w; rollback failed: %v", err, rollbackErr)
+		}
+		return err
+	}
+	return nil
+}
+
 func (m *Manager) ApplyConfig(cfg Config) error {
 	for i := range cfg.Outbounds {
 		cfg.Outbounds[i] = enrichOutboundFromRaw(cfg.Outbounds[i])
@@ -176,6 +264,7 @@ func (m *Manager) ApplyConfig(cfg Config) error {
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	snapshot := m.snapshotLocked()
 
 	m.cfg = cfg
 	m.inbounds = map[string]InboundConfig{}
@@ -192,16 +281,10 @@ func (m *Manager) ApplyConfig(cfg Config) error {
 	}
 	m.rules = append([]RoutingRule(nil), cfg.Routing.Rules...)
 	if err := m.configureKernelLocked(cfg.Kernel); err != nil {
+		m.restoreLocked(snapshot)
 		return err
 	}
-
-	if err := m.persistConfigLocked(cfg); err != nil {
-		return err
-	}
-	if err := m.persistRuntimeLocked(); err != nil {
-		return err
-	}
-	if err := m.applyKernelLocked(); err != nil {
+	if err := m.commitWithRollbackLocked(snapshot); err != nil {
 		return err
 	}
 	InitInbounds(cfg.Inbounds)
@@ -381,11 +464,12 @@ func (m *Manager) UpdateKernelConfig(cfg KernelConfig) error {
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	snapshot := m.snapshotLocked()
 	if err := m.configureKernelLocked(cfg); err != nil {
 		return err
 	}
 	m.cfg.Kernel = cfg
-	return m.commitLocked()
+	return m.commitWithRollbackLocked(snapshot)
 }
 
 func (m *Manager) configureKernelLocked(cfg KernelConfig) error {
@@ -433,8 +517,9 @@ func normalizeKernelConfig(cfg KernelConfig) KernelConfig {
 func (m *Manager) UpdateMihomoConfig(cfg MihomoConfig) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	snapshot := m.snapshotLocked()
 	m.cfg.Mihomo = cfg
-	return m.commitLocked()
+	return m.commitWithRollbackLocked(snapshot)
 }
 
 func (m *Manager) CreateProxy(req ProxyCreateRequest) (Node, error) {
@@ -453,6 +538,7 @@ func (m *Manager) CreateProxy(req ProxyCreateRequest) (Node, error) {
 	if _, exists := m.inbounds[req.Name]; exists {
 		return Node{}, fmt.Errorf("inbound %q already exists", req.Name)
 	}
+	snapshot := m.snapshotLocked()
 
 	inbound := InboundConfig{
 		Name:                   req.Name,
@@ -493,7 +579,7 @@ func (m *Manager) CreateProxy(req ProxyCreateRequest) (Node, error) {
 	m.cfg.Inbounds = append(m.cfg.Inbounds, inbound)
 	m.ensureTrafficLocked(req.Name)
 	m.ensureHealthLocked(req.Name, inbound.Disabled)
-	if err := m.commitLocked(); err != nil {
+	if err := m.commitWithRollbackLocked(snapshot); err != nil {
 		return Node{}, err
 	}
 	return m.nodeLocked(req.Name, "inbound"), nil
@@ -524,6 +610,7 @@ func (m *Manager) CreateForward(req ForwardCreateRequest) (Node, error) {
 	if _, exists := m.inbounds[req.Name]; exists {
 		return Node{}, fmt.Errorf("inbound %q already exists", req.Name)
 	}
+	snapshot := m.snapshotLocked()
 
 	inbound := InboundConfig{
 		Name:       req.Name,
@@ -543,7 +630,7 @@ func (m *Manager) CreateForward(req ForwardCreateRequest) (Node, error) {
 	m.cfg.Routing.Rules = append(m.cfg.Routing.Rules, rule)
 	m.ensureTrafficLocked(inbound.Name)
 	m.ensureHealthLocked(inbound.Name, inbound.Disabled)
-	if err := m.commitLocked(); err != nil {
+	if err := m.commitWithRollbackLocked(snapshot); err != nil {
 		return Node{}, err
 	}
 	return m.nodeLocked(inbound.Name, "inbound"), nil
@@ -568,11 +655,12 @@ func (m *Manager) UpsertInbound(inbound InboundConfig) (Node, error) {
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	snapshot := m.snapshotLocked()
 	m.inbounds[inbound.Name] = inbound
 	m.cfg.Inbounds = upsertInboundConfig(m.cfg.Inbounds, inbound)
 	m.ensureTrafficLocked(inbound.Name)
 	m.ensureHealthLocked(inbound.Name, inbound.Disabled)
-	if err := m.commitLocked(); err != nil {
+	if err := m.commitWithRollbackLocked(snapshot); err != nil {
 		return Node{}, err
 	}
 	return m.nodeLocked(inbound.Name, "inbound"), nil
@@ -596,6 +684,7 @@ func (m *Manager) UpsertOutbound(outbound OutboundConfig) (Node, error) {
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	snapshot := m.snapshotLocked()
 	if originalName != "" && originalName != outbound.Name {
 		if _, ok := m.outbounds[originalName]; !ok {
 			return Node{}, fmt.Errorf("outbound %q does not exist", originalName)
@@ -623,7 +712,7 @@ func (m *Manager) UpsertOutbound(outbound OutboundConfig) (Node, error) {
 	m.cfg.Outbounds = upsertOutboundConfig(m.cfg.Outbounds, outbound)
 	m.ensureTrafficLocked(outbound.Name)
 	m.ensureHealthLocked(outbound.Name, outbound.Disabled)
-	if err := m.commitLocked(); err != nil {
+	if err := m.commitWithRollbackLocked(snapshot); err != nil {
 		return Node{}, err
 	}
 	return m.nodeLocked(outbound.Name, "outbound"), nil
@@ -644,6 +733,7 @@ func (m *Manager) ImportOutboundsReport(outbounds []OutboundConfig) (ImportOutbo
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	snapshot := m.snapshotLocked()
 	report := ImportOutboundsReport{
 		Parsed:   len(outbounds),
 		Imported: make([]Node, 0, len(outbounds)),
@@ -703,7 +793,7 @@ func (m *Manager) ImportOutboundsReport(outbounds []OutboundConfig) (ImportOutbo
 			Warnings:      outboundImportWarnings(outbound),
 		})
 	}
-	if err := m.commitLocked(); err != nil {
+	if err := m.commitWithRollbackLocked(snapshot); err != nil {
 		return ImportOutboundsReport{}, err
 	}
 	return report, nil
@@ -757,9 +847,10 @@ func (m *Manager) UpdateSubscriptions() ([]SubscriptionUpdateResult, error) {
 func (m *Manager) UpdateRoutingConfig(routing RoutingConfig) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	snapshot := m.snapshotLocked()
 	m.cfg.Routing = routing
 	m.rules = append([]RoutingRule(nil), routing.Rules...)
-	return m.commitLocked()
+	return m.commitWithRollbackLocked(snapshot)
 }
 
 func (m *Manager) PreviewRouting(req RoutingPreviewRequest) RoutingPreviewResult {
@@ -968,6 +1059,7 @@ func (m *Manager) DeleteNode(nodeType, name string) error {
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	snapshot := m.snapshotLocked()
 	switch nodeType {
 	case "inbound":
 		if _, ok := m.inbounds[name]; !ok {
@@ -988,10 +1080,54 @@ func (m *Manager) DeleteNode(nodeType, name string) error {
 	default:
 		return fmt.Errorf("node type must be inbound or outbound")
 	}
-	if err := m.commitLocked(); err != nil {
+	if err := m.commitWithRollbackLocked(snapshot); err != nil {
 		return err
 	}
 	return nil
+}
+
+func (m *Manager) DeleteNodes(items []BatchNodeItem) (int, error) {
+	if len(items) == 0 {
+		return 0, fmt.Errorf("no nodes selected")
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	snapshot := m.snapshotLocked()
+	for _, item := range items {
+		if item.Name == "" {
+			return 0, fmt.Errorf("name is required")
+		}
+		switch item.Type {
+		case "inbound":
+			if _, ok := m.inbounds[item.Name]; !ok {
+				return 0, fmt.Errorf("inbound %q does not exist", item.Name)
+			}
+		case "outbound":
+			if _, ok := m.outbounds[item.Name]; !ok {
+				return 0, fmt.Errorf("outbound %q does not exist", item.Name)
+			}
+		default:
+			return 0, fmt.Errorf("node type must be inbound or outbound")
+		}
+	}
+	for _, item := range items {
+		switch item.Type {
+		case "inbound":
+			delete(m.inbounds, item.Name)
+			m.cfg.Inbounds = deleteInboundConfig(m.cfg.Inbounds, item.Name)
+			m.rules = deleteRulesForNode(m.rules, "inbound", item.Name)
+			m.cfg.Routing.Rules = deleteRulesForNode(m.cfg.Routing.Rules, "inbound", item.Name)
+		case "outbound":
+			delete(m.outbounds, item.Name)
+			m.cfg.Outbounds = deleteOutboundConfig(m.cfg.Outbounds, item.Name)
+			m.rules = deleteRulesForNode(m.rules, "outbound", item.Name)
+			m.cfg.Routing.Rules = deleteRulesForNode(m.cfg.Routing.Rules, "outbound", item.Name)
+		}
+	}
+	if err := m.commitWithRollbackLocked(snapshot); err != nil {
+		return 0, err
+	}
+	return len(items), nil
 }
 
 func (m *Manager) SetNodeEnabled(nodeType, name string, enabled bool) (Node, error) {
@@ -1000,6 +1136,7 @@ func (m *Manager) SetNodeEnabled(nodeType, name string, enabled bool) (Node, err
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	snapshot := m.snapshotLocked()
 	switch nodeType {
 	case "inbound":
 		inbound, ok := m.inbounds[name]
@@ -1021,10 +1158,59 @@ func (m *Manager) SetNodeEnabled(nodeType, name string, enabled bool) (Node, err
 		return Node{}, fmt.Errorf("node type must be inbound or outbound")
 	}
 	m.ensureHealthLocked(name, !enabled)
-	if err := m.commitLocked(); err != nil {
+	if err := m.commitWithRollbackLocked(snapshot); err != nil {
 		return Node{}, err
 	}
 	return m.nodeLocked(name, nodeType), nil
+}
+
+func (m *Manager) SetNodesEnabled(items []BatchNodeItem, enabled bool) ([]Node, error) {
+	if len(items) == 0 {
+		return nil, fmt.Errorf("no nodes selected")
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	snapshot := m.snapshotLocked()
+	for _, item := range items {
+		if item.Name == "" {
+			return nil, fmt.Errorf("name is required")
+		}
+		switch item.Type {
+		case "inbound":
+			if _, ok := m.inbounds[item.Name]; !ok {
+				return nil, fmt.Errorf("inbound %q does not exist", item.Name)
+			}
+		case "outbound":
+			if _, ok := m.outbounds[item.Name]; !ok {
+				return nil, fmt.Errorf("outbound %q does not exist", item.Name)
+			}
+		default:
+			return nil, fmt.Errorf("node type must be inbound or outbound")
+		}
+	}
+	for _, item := range items {
+		switch item.Type {
+		case "inbound":
+			inbound := m.inbounds[item.Name]
+			inbound.Disabled = !enabled
+			m.inbounds[item.Name] = inbound
+			m.cfg.Inbounds = upsertInboundConfig(m.cfg.Inbounds, inbound)
+		case "outbound":
+			outbound := m.outbounds[item.Name]
+			outbound.Disabled = !enabled
+			m.outbounds[item.Name] = outbound
+			m.cfg.Outbounds = upsertOutboundConfig(m.cfg.Outbounds, outbound)
+		}
+		m.ensureHealthLocked(item.Name, !enabled)
+	}
+	if err := m.commitWithRollbackLocked(snapshot); err != nil {
+		return nil, err
+	}
+	nodes := make([]Node, 0, len(items))
+	for _, item := range items {
+		nodes = append(nodes, m.nodeLocked(item.Name, item.Type))
+	}
+	return nodes, nil
 }
 
 func (m *Manager) TestNode(nodeType, name string) (NodeTestResult, error) {
@@ -1528,8 +1714,101 @@ func (m *Manager) persistConfigLocked(cfg Config) error {
 	if err != nil {
 		return err
 	}
-	_, err = m.db.Exec(`INSERT INTO config_history (content, created_at) VALUES (?, ?)`, string(content), time.Now().Format(time.RFC3339))
+	if _, err = m.db.Exec(`INSERT INTO config_history (content, created_at) VALUES (?, ?)`, string(content), time.Now().Format(time.RFC3339)); err != nil {
+		return err
+	}
+	_, err = m.cleanupConfigHistory(defaultConfigHistoryKeep)
 	return err
+}
+
+func (m *Manager) ListConfigHistory(limit int) ([]ConfigHistoryEntry, error) {
+	if limit < 1 {
+		limit = 20
+	}
+	if limit > defaultConfigHistoryKeep {
+		limit = defaultConfigHistoryKeep
+	}
+	rows, err := m.db.Query(`SELECT id, content, created_at FROM config_history ORDER BY id DESC LIMIT ?`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	entries := []ConfigHistoryEntry{}
+	for rows.Next() {
+		var entry ConfigHistoryEntry
+		var content string
+		if err := rows.Scan(&entry.ID, &content, &entry.CreatedAt); err != nil {
+			return nil, err
+		}
+		entry.Summary = summarizeConfigHistory(content)
+		entries = append(entries, entry)
+	}
+	return entries, rows.Err()
+}
+
+func summarizeConfigHistory(content string) string {
+	var cfg Config
+	if err := json.Unmarshal([]byte(content), &cfg); err != nil {
+		return "无法解析历史配置"
+	}
+	kernelType := firstNonEmpty(cfg.Kernel.Type, "placeholder")
+	mode := firstNonEmpty(routingMode(cfg.Routing.Mode), "rule")
+	return fmt.Sprintf("%s / %s，入站 %d，出站 %d，规则 %d", kernelType, mode, len(cfg.Inbounds), len(cfg.Outbounds), len(cfg.Routing.Rules))
+}
+
+func (m *Manager) RestoreConfigHistory(id int64) error {
+	if id < 1 {
+		return fmt.Errorf("valid config history id is required")
+	}
+	var content string
+	if err := m.db.QueryRow(`SELECT content FROM config_history WHERE id = ?`, id).Scan(&content); err != nil {
+		if err == sql.ErrNoRows {
+			return fmt.Errorf("config history %d does not exist", id)
+		}
+		return err
+	}
+	var cfg Config
+	if err := json.Unmarshal([]byte(content), &cfg); err != nil {
+		return err
+	}
+	current := m.ConfigSnapshot()
+	cfg.Server.AdminUser = firstNonEmpty(cfg.Server.AdminUser, current.Server.AdminUser)
+	cfg.Server.AdminPass = current.Server.AdminPass
+	if cfg.Server.WebPort == 0 {
+		cfg.Server.WebPort = current.Server.WebPort
+	}
+	if cfg.Kernel.Type == "" {
+		cfg.Kernel.Type = "placeholder"
+	}
+	if cfg.Kernel.ConfigPath == "" {
+		cfg.Kernel.ConfigPath = "kernel.generated.json"
+	}
+	cfg.Routing = normalizeRoutingConfig(cfg.Routing)
+	return m.ApplyConfig(cfg)
+}
+
+func (m *Manager) CleanupConfigHistory(keep int) (int64, error) {
+	if keep < 1 {
+		return 0, fmt.Errorf("keep must be greater than 0")
+	}
+	if keep > 1000 {
+		keep = 1000
+	}
+	return m.cleanupConfigHistory(keep)
+}
+
+func (m *Manager) cleanupConfigHistory(keep int) (int64, error) {
+	result, err := m.db.Exec(
+		`DELETE FROM config_history
+		 WHERE id NOT IN (
+		   SELECT id FROM config_history ORDER BY id DESC LIMIT ?
+		 )`,
+		keep,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 func (m *Manager) saveConfigLocked() error {
@@ -1543,6 +1822,9 @@ func (m *Manager) commitLocked() error {
 	if err := m.cfg.Validate(); err != nil {
 		return err
 	}
+	if err := m.applyKernelLocked(); err != nil {
+		return err
+	}
 	if err := m.saveConfigLocked(); err != nil {
 		return err
 	}
@@ -1552,7 +1834,7 @@ func (m *Manager) commitLocked() error {
 	if err := m.persistRuntimeLocked(); err != nil {
 		return err
 	}
-	return m.applyKernelLocked()
+	return nil
 }
 
 func (m *Manager) applyKernelLocked() error {
@@ -1573,14 +1855,53 @@ func (m *Manager) applyKernelLocked() error {
 		return err
 	}
 	path := m.cfg.Kernel.ConfigPath
+	previousGenerated, hadPreviousGenerated, err := readGeneratedFile(path)
+	if err != nil {
+		return err
+	}
 	if err := saveGeneratedFile(path, data); err != nil {
 		return err
 	}
 	status := m.kernel.Status()
 	if status.Running {
-		return m.kernel.Reload(path)
+		if err := m.kernel.Reload(path); err != nil {
+			_ = restoreGeneratedFile(path, previousGenerated, hadPreviousGenerated)
+			return err
+		}
+		return nil
 	}
-	return m.kernel.Start(path)
+	if err := m.kernel.Start(path); err != nil {
+		_ = restoreGeneratedFile(path, previousGenerated, hadPreviousGenerated)
+		return err
+	}
+	return nil
+}
+
+func readGeneratedFile(path string) ([]byte, bool, error) {
+	if path == "" {
+		return nil, false, nil
+	}
+	data, err := os.ReadFile(path)
+	if err == nil {
+		return data, true, nil
+	}
+	if os.IsNotExist(err) {
+		return nil, false, nil
+	}
+	return nil, false, err
+}
+
+func restoreGeneratedFile(path string, data []byte, existed bool) error {
+	if path == "" {
+		return nil
+	}
+	if !existed {
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		return nil
+	}
+	return saveGeneratedFile(path, data)
 }
 
 func (m *Manager) persistRuntimeLocked() error {

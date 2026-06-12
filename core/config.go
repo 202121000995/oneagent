@@ -181,6 +181,9 @@ func (c Config) Validate() error {
 		if inbound.Name == "" {
 			return errors.New("inbound name cannot be empty")
 		}
+		if _, ok := seenInbound[inbound.Name]; ok {
+			return fmt.Errorf("duplicate inbound name %q", inbound.Name)
+		}
 		if inbound.Protocol == "" {
 			return fmt.Errorf("inbound %q protocol cannot be empty", inbound.Name)
 		}
@@ -200,6 +203,9 @@ func (c Config) Validate() error {
 	for _, outbound := range c.Outbounds {
 		if outbound.Name == "" {
 			return errors.New("outbound name cannot be empty")
+		}
+		if _, ok := seenOutbound[outbound.Name]; ok {
+			return fmt.Errorf("duplicate outbound name %q", outbound.Name)
 		}
 		if outbound.Protocol == "" {
 			return fmt.Errorf("outbound %q protocol cannot be empty", outbound.Name)
@@ -226,7 +232,14 @@ func (c Config) Validate() error {
 		}
 	}
 	if mode == "rule" {
+		seenRuleNames := map[string]struct{}{}
 		for _, rule := range c.Routing.Rules {
+			if rule.Name != "" {
+				if _, ok := seenRuleNames[rule.Name]; ok {
+					return fmt.Errorf("duplicate routing rule name %q", rule.Name)
+				}
+				seenRuleNames[rule.Name] = struct{}{}
+			}
 			if rule.Disabled {
 				continue
 			}

@@ -1,13 +1,20 @@
 package core
 
 import (
+	"errors"
+	"fmt"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
 type testKernel struct {
-	name    string
-	stopped bool
+	name             string
+	stopped          bool
+	running          bool
+	lastInboundCount int
+	failWithInbounds bool
 }
 
 func (k *testKernel) Name() string {
@@ -16,8 +23,9 @@ func (k *testKernel) Name() string {
 
 func (k *testKernel) Configure(KernelConfig) {}
 
-func (k *testKernel) GenerateConfig(RuntimeState) ([]byte, error) {
-	return []byte("{}"), nil
+func (k *testKernel) GenerateConfig(state RuntimeState) ([]byte, error) {
+	k.lastInboundCount = len(state.Inbounds)
+	return []byte(fmt.Sprintf(`{"inbounds":%d}`, k.lastInboundCount)), nil
 }
 
 func (k *testKernel) ValidateConfig(string) error {
@@ -25,20 +33,28 @@ func (k *testKernel) ValidateConfig(string) error {
 }
 
 func (k *testKernel) Start(string) error {
+	if k.failWithInbounds && k.lastInboundCount > 0 {
+		return errors.New("kernel start failed")
+	}
+	k.running = true
 	return nil
 }
 
 func (k *testKernel) Reload(string) error {
+	if k.failWithInbounds && k.lastInboundCount > 0 {
+		return errors.New("kernel reload failed")
+	}
 	return nil
 }
 
 func (k *testKernel) Stop() error {
 	k.stopped = true
+	k.running = false
 	return nil
 }
 
 func (k *testKernel) Status() KernelStatus {
-	return KernelStatus{Name: k.name, Running: true}
+	return KernelStatus{Name: k.name, Running: k.running}
 }
 
 func TestUpsertOutboundRenameUpdatesRouting(t *testing.T) {
@@ -114,6 +130,160 @@ func TestApplyConfigStopsOldKernelWhenTypeChanges(t *testing.T) {
 	}
 	if manager.kernel == oldKernel {
 		t.Fatal("expected ApplyConfig to replace the old kernel")
+	}
+}
+
+func TestConfigValidateRejectsDuplicateNames(t *testing.T) {
+	cfg := Config{
+		Inbounds: []InboundConfig{
+			{Name: "dup", Protocol: "mixed", Port: 1080},
+			{Name: "dup", Protocol: "http", Port: 1081},
+		},
+	}
+	cfg.Server.WebPort = 8080
+	cfg.Server.AdminUser = "admin"
+	cfg.Server.AdminPass = "password123"
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "duplicate inbound name") {
+		t.Fatalf("expected duplicate inbound error, got %v", err)
+	}
+
+	cfg.Inbounds = nil
+	cfg.Outbounds = []OutboundConfig{
+		{Name: "dup", Protocol: "http", Address: "127.0.0.1", Port: 8080},
+		{Name: "dup", Protocol: "http", Address: "127.0.0.1", Port: 8081},
+	}
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "duplicate outbound name") {
+		t.Fatalf("expected duplicate outbound error, got %v", err)
+	}
+
+	cfg.Outbounds = []OutboundConfig{{Name: "proxy", Protocol: "http", Address: "127.0.0.1", Port: 8080}}
+	cfg.Routing = RoutingConfig{
+		Mode:            "rule",
+		DefaultOutbound: "proxy",
+		Rules: []RoutingRule{
+			{Name: "dup-rule", MatchType: "domain", Value: "example.com", Outbound: "proxy"},
+			{Name: "dup-rule", MatchType: "domain", Value: "example.org", Outbound: "proxy"},
+		},
+	}
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "duplicate routing rule name") {
+		t.Fatalf("expected duplicate routing rule error, got %v", err)
+	}
+}
+
+func TestKernelFailureRollsBackRuntimeAndGeneratedConfig(t *testing.T) {
+	tmpDir := t.TempDir()
+	generatedPath := filepath.Join(tmpDir, "kernel.generated.json")
+	if err := os.WriteFile(generatedPath, []byte(`{"inbounds":0}`), 0o644); err != nil {
+		t.Fatalf("write generated config: %v", err)
+	}
+	db, err := InitDatabase(filepath.Join(tmpDir, "nodetools.db"))
+	if err != nil {
+		t.Fatalf("InitDatabase returned error: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	manager := NewManager(db, filepath.Join(tmpDir, "config.yaml"))
+	manager.kernel = &testKernel{name: "placeholder", failWithInbounds: true}
+	manager.cfg = Config{Kernel: KernelConfig{Type: "placeholder", ConfigPath: generatedPath}}
+	manager.cfg.Server.WebPort = 8080
+	manager.cfg.Server.AdminUser = "admin"
+	manager.cfg.Server.AdminPass = "password123"
+
+	_, err = manager.CreateProxy(ProxyCreateRequest{Name: "local", Protocol: "mixed", Listen: "0.0.0.0", Port: 1080})
+	if err == nil {
+		t.Fatal("expected kernel failure")
+	}
+	if _, ok := manager.inbounds["local"]; ok {
+		t.Fatal("expected failed create to roll back inbound map")
+	}
+	if len(manager.ConfigSnapshot().Inbounds) != 0 {
+		t.Fatalf("expected failed create to roll back config, got %#v", manager.ConfigSnapshot().Inbounds)
+	}
+	data, err := os.ReadFile(generatedPath)
+	if err != nil {
+		t.Fatalf("read generated config: %v", err)
+	}
+	if string(data) != `{"inbounds":0}` {
+		t.Fatalf("expected generated config to roll back, got %s", string(data))
+	}
+}
+
+func TestBatchEnableIsAtomic(t *testing.T) {
+	db, err := InitDatabase(filepath.Join(t.TempDir(), "nodetools.db"))
+	if err != nil {
+		t.Fatalf("InitDatabase returned error: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	manager := NewManager(db, "")
+	cfg := Config{
+		Outbounds: []OutboundConfig{
+			{Name: "one", Protocol: "http", Address: "127.0.0.1", Port: 8081},
+			{Name: "two", Protocol: "http", Address: "127.0.0.1", Port: 8082},
+		},
+		Routing: RoutingConfig{Mode: "global", DefaultOutbound: "one"},
+	}
+	cfg.Server.WebPort = 8080
+	cfg.Server.AdminUser = "admin"
+	cfg.Server.AdminPass = "password123"
+	if err := manager.ApplyConfig(cfg); err != nil {
+		t.Fatalf("ApplyConfig returned error: %v", err)
+	}
+
+	_, err = manager.SetNodesEnabled([]BatchNodeItem{
+		{Type: "outbound", Name: "one"},
+		{Type: "outbound", Name: "missing"},
+	}, false)
+	if err == nil {
+		t.Fatal("expected missing node error")
+	}
+	snapshot := manager.ConfigSnapshot()
+	if snapshot.Outbounds[0].Disabled {
+		t.Fatalf("expected batch enable failure to leave first outbound enabled, got %#v", snapshot.Outbounds)
+	}
+}
+
+func TestConfigHistoryRestore(t *testing.T) {
+	db, err := InitDatabase(filepath.Join(t.TempDir(), "nodetools.db"))
+	if err != nil {
+		t.Fatalf("InitDatabase returned error: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	manager := NewManager(db, "")
+	first := Config{
+		Outbounds: []OutboundConfig{{Name: "old", Protocol: "http", Address: "127.0.0.1", Port: 8081}},
+		Routing:   RoutingConfig{Mode: "global", DefaultOutbound: "old"},
+	}
+	first.Server.WebPort = 8080
+	first.Server.AdminUser = "admin"
+	first.Server.AdminPass = "password123"
+	if err := manager.ApplyConfig(first); err != nil {
+		t.Fatalf("first ApplyConfig returned error: %v", err)
+	}
+	second := first
+	second.Outbounds = []OutboundConfig{{Name: "new", Protocol: "http", Address: "127.0.0.1", Port: 8082}}
+	second.Routing.DefaultOutbound = "new"
+	if err := manager.ApplyConfig(second); err != nil {
+		t.Fatalf("second ApplyConfig returned error: %v", err)
+	}
+
+	history, err := manager.ListConfigHistory(10)
+	if err != nil {
+		t.Fatalf("ListConfigHistory returned error: %v", err)
+	}
+	if len(history) < 2 {
+		t.Fatalf("expected at least two history entries, got %#v", history)
+	}
+	if err := manager.RestoreConfigHistory(history[1].ID); err != nil {
+		t.Fatalf("RestoreConfigHistory returned error: %v", err)
+	}
+	snapshot := manager.ConfigSnapshot()
+	if len(snapshot.Outbounds) != 1 || snapshot.Outbounds[0].Name != "old" || snapshot.Routing.DefaultOutbound != "old" {
+		t.Fatalf("expected restored old config, got %#v", snapshot)
+	}
+	if snapshot.Server.AdminPass != "password123" {
+		t.Fatal("expected restore to preserve current admin password")
 	}
 }
 
