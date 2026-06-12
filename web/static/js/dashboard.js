@@ -56,8 +56,8 @@ const routingMatchTypes = [
   ["domain_suffix", "域名后缀"],
   ["domain_keyword", "域名关键词"],
   ["ip_cidr", "IP/CIDR"],
-  ["geoip", "GeoIP"],
-  ["geosite", "Geosite"],
+  ["geoip", "GeoIP（mihomo/规则集）"],
+  ["geosite", "Geosite（mihomo/规则集）"],
   ["protocol", "协议"],
   ["port", "目标端口"],
 ];
@@ -831,7 +831,7 @@ const updateRoutingModeUI = () => {
     hint.textContent = {
       direct: "全部直连：所有流量直接从 VPS 出口访问，不使用默认出站，分流规则不会生效。",
       global: "全局代理：所有流量都走默认出站，下面的分流规则不会生效。",
-      rule: "规则分流：先按下方规则匹配，未命中流量走默认出站。绕过大陆规则只让国内和内网直连，国外默认走节点。",
+      rule: "规则分流：先按下方规则匹配，未命中流量走默认出站。sing-box 1.12+ 不再支持旧 GeoIP/Geosite 字段，相关规则不会写入 sing-box，mihomo 可用。",
     }[mode] || "";
   }
   if (globalMode) document.getElementById("routingPresetInput").value = "custom";

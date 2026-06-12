@@ -668,9 +668,9 @@ func singBoxRules(routing RoutingConfig) []map[string]any {
 		case "ip_cidr":
 			item["ip_cidr"] = splitCSV(value)
 		case "geoip":
-			item["geoip"] = splitCSV(value)
+			continue
 		case "geosite":
-			item["geosite"] = splitCSV(value)
+			continue
 		case "protocol":
 			item["protocol"] = splitCSV(value)
 		case "port":
