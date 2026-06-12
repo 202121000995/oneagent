@@ -43,8 +43,15 @@ package_web_port() {
   fi
 }
 
+package_public_host() {
+  if [ -f "./config.yaml" ]; then
+    awk '/public_host:/ {print $2; exit}' "./config.yaml" 2>/dev/null || true
+  fi
+}
+
 WEB_PORT="${WEB_PORT:-$(package_web_port)}"
 WEB_PORT="${WEB_PORT:-39080}"
+WEB_PUBLIC_HOST="${WEB_PUBLIC_HOST:-$(package_public_host)}"
 
 update_config_port() {
   path="$1"
@@ -66,6 +73,40 @@ update_config_port() {
   mv "${tmp_path}" "${path}"
 }
 
+update_config_public_host() {
+  path="$1"
+  host="$2"
+  tmp_path="${path}.tmp"
+
+  if grep -q '^[[:space:]]*public_host:' "${path}"; then
+    awk -v host="${host}" '
+      /^[[:space:]]*public_host:/ {
+        sub(/public_host:.*/, "public_host: " host)
+      }
+      { print }
+    ' "${path}" > "${tmp_path}"
+  else
+    awk -v host="${host}" '
+      /^[[:space:]]*web_port:/ && done == 0 {
+        print
+        match($0, /^[[:space:]]*/)
+        indent = substr($0, RSTART, RLENGTH)
+        print indent "public_host: " host
+        done = 1
+        next
+      }
+      { print }
+      END {
+        if (done == 0) {
+          print "server:"
+          print "  public_host: " host
+        }
+      }
+    ' "${path}" > "${tmp_path}"
+  fi
+  mv "${tmp_path}" "${path}"
+}
+
 if [ -f "./config.yaml" ] && [ ! -f "${INSTALL_DIR}/config.yaml" ]; then
   cp "./config.yaml" "${INSTALL_DIR}/config.yaml"
 elif [ -f "./config.yaml" ]; then
@@ -80,6 +121,9 @@ fi
 
 if [ -f "${INSTALL_DIR}/config.yaml" ] && [ "${KEEP_CONFIG}" != "1" ]; then
   update_config_port "${INSTALL_DIR}/config.yaml" "${WEB_PORT}"
+  if [ -n "${WEB_PUBLIC_HOST}" ]; then
+    update_config_public_host "${INSTALL_DIR}/config.yaml" "${WEB_PUBLIC_HOST}"
+  fi
 fi
 
 cp -R "./web/." "${RELEASE_DIR}/web/"

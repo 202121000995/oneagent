@@ -14,9 +14,10 @@ import (
 
 type Config struct {
 	Server struct {
-		WebPort   int    `yaml:"web_port" json:"web_port"`
-		AdminUser string `yaml:"admin_user" json:"admin_user"`
-		AdminPass string `yaml:"admin_pass" json:"-"`
+		WebPort    int    `yaml:"web_port" json:"web_port"`
+		PublicHost string `yaml:"public_host,omitempty" json:"public_host,omitempty"`
+		AdminUser  string `yaml:"admin_user" json:"admin_user"`
+		AdminPass  string `yaml:"admin_pass" json:"-"`
 	} `yaml:"server" json:"server"`
 	Kernel    KernelConfig     `yaml:"kernel" json:"kernel"`
 	Inbounds  []InboundConfig  `yaml:"inbounds" json:"inbounds"`

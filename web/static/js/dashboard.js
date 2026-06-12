@@ -289,6 +289,12 @@ const escapeHTML = (value) => String(value ?? "")
   .replaceAll('"', "&quot;")
   .replaceAll("'", "&#039;");
 
+const shareHost = () => {
+  const host = location.hostname;
+  if (!host || host === "localhost" || host === "::1" || host === "0.0.0.0" || host.startsWith("127.")) return "";
+  return host;
+};
+
 const randomHex = (bytes) => {
   const data = new Uint8Array(bytes);
   crypto.getRandomValues(data);
@@ -1515,9 +1521,8 @@ document.addEventListener("click", async (event) => {
 
   const shareInboundButton = event.target.closest("[data-share-inbound]");
   if (shareInboundButton) {
-    const host = location.hostname;
     try {
-      const result = await postJSON(`/api/inbounds/${encodeURIComponent(shareInboundButton.dataset.shareInbound)}/share`, { host });
+      const result = await postJSON(`/api/inbounds/${encodeURIComponent(shareInboundButton.dataset.shareInbound)}/share`, { host: shareHost() });
       await showShareLink(result.name, result.link);
     } catch (error) {
       alert(error.message);

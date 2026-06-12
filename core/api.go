@@ -299,7 +299,13 @@ func RegisterAPI(mux *http.ServeMux, manager *Manager, auth *Auth) {
 			Host string `json:"host"`
 		}
 		_ = json.NewDecoder(r.Body).Decode(&req)
-		result, err := manager.ShareInbound(r.PathValue("name"), req.Host)
+		result, err := manager.ShareInbound(
+			r.PathValue("name"),
+			req.Host,
+			r.Header.Get("X-Forwarded-Host"),
+			r.Header.Get("X-Real-Host"),
+			r.Host,
+		)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return

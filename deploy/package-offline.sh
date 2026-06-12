@@ -12,6 +12,7 @@ COMMIT="${COMMIT:-$(git rev-parse --short HEAD 2>/dev/null || echo dev)}"
 KERNEL_SOURCE_DIR="${KERNEL_SOURCE_DIR:-kernels}"
 ALLOW_MISSING_KERNELS="${ALLOW_MISSING_KERNELS:-0}"
 DEPLOY_WEB_PORT="${DEPLOY_WEB_PORT:-39080}"
+DEPLOY_PUBLIC_HOST="${DEPLOY_PUBLIC_HOST:-}"
 DEPLOY_PROXY_USER="${DEPLOY_PROXY_USER:-nodetools}"
 DEPLOY_PROXY_PASS="${DEPLOY_PROXY_PASS:-}"
 
@@ -40,6 +41,11 @@ make_deploy_config() {
   cat > "${path}" <<EOF
 server:
   web_port: ${DEPLOY_WEB_PORT}
+EOF
+  if [ -n "${DEPLOY_PUBLIC_HOST}" ]; then
+    printf "  public_host: %s\n" "${DEPLOY_PUBLIC_HOST}" >> "${path}"
+  fi
+  cat >> "${path}" <<EOF
   admin_user: admin
   admin_pass: password123
 kernel:

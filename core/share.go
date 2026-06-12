@@ -45,13 +45,16 @@ func publicKeyFromRealityPrivate(privateKey string) (string, error) {
 	return base64.RawURLEncoding.EncodeToString(key.PublicKey().Bytes()), nil
 }
 
-func (m *Manager) ShareInbound(name, publicHost string) (InboundShareResponse, error) {
+func (m *Manager) ShareInbound(name string, publicHosts ...string) (InboundShareResponse, error) {
 	m.mu.RLock()
 	inbound, ok := m.inbounds[name]
+	configHost := m.cfg.Server.PublicHost
 	m.mu.RUnlock()
 	if !ok {
 		return InboundShareResponse{}, fmt.Errorf("inbound %q does not exist", name)
 	}
+	publicHosts = append([]string{configHost}, publicHosts...)
+	publicHost := bestShareHost(publicHosts...)
 	link, err := inboundShareLink(inbound, publicHost)
 	if err != nil {
 		return InboundShareResponse{}, err
@@ -74,7 +77,7 @@ func (m *Manager) ShareOutbound(name string) (InboundShareResponse, error) {
 }
 
 func inboundShareLink(inbound InboundConfig, publicHost string) (string, error) {
-	host := strings.TrimSpace(publicHost)
+	host := bestShareHost(publicHost)
 	if host == "" {
 		host = "127.0.0.1"
 	}
@@ -96,12 +99,15 @@ func inboundShareLink(inbound InboundConfig, publicHost string) (string, error) 
 			values.Set("security", "reality")
 			values.Set("sni", inbound.ServerName)
 			values.Set("pbk", publicKey)
+			values.Set("fp", "chrome")
 			if inbound.ShortID != "" {
-				values.Set("sid", inbound.ShortID)
+				values.Set("sid", firstNonEmpty(splitCSV(inbound.ShortID)...))
 			}
 		} else if inbound.TLS || inbound.ServerName != "" {
 			values.Set("security", "tls")
 			values.Set("sni", inbound.ServerName)
+			values.Set("allowInsecure", "1")
+			values.Set("skip-cert-verify", "1")
 		} else {
 			values.Set("security", "none")
 		}
@@ -123,15 +129,21 @@ func inboundShareLink(inbound InboundConfig, publicHost string) (string, error) 
 	case "anytls":
 		values := url.Values{}
 		values.Set("peer", inbound.ServerName)
+		values.Set("sni", inbound.ServerName)
 		if inbound.TLS || inbound.ServerName != "" {
 			values.Set("security", "tls")
 		}
+		values.Set("allowInsecure", "1")
+		values.Set("insecure", "1")
+		values.Set("skip-cert-verify", "1")
 		return "anytls://" + url.QueryEscape(inbound.Password) + "@" + hostPort + "?" + values.Encode() + "#" + fragment, nil
 	case "trojan":
 		values := url.Values{}
 		if inbound.TLS || inbound.ServerName != "" {
 			values.Set("security", "tls")
 			values.Set("sni", inbound.ServerName)
+			values.Set("allowInsecure", "1")
+			values.Set("skip-cert-verify", "1")
 		}
 		if inbound.Transport != "" && inbound.Transport != "tcp" {
 			values.Set("type", inbound.Transport)
@@ -157,17 +169,56 @@ func inboundShareLink(inbound InboundConfig, publicHost string) (string, error) 
 		return "ss://" + userInfo + "@" + hostPort + "#" + fragment, nil
 	case "shadowtls":
 		values := url.Values{}
-		values.Set("version", "3")
-		values.Set("security", "tls")
-		values.Set("sni", inbound.ServerName)
-		addQueryValue(values, "handshake", inbound.RealityHandshakeServer)
-		if inbound.RealityHandshakePort > 0 {
-			values.Set("handshake_port", strconv.Itoa(inbound.RealityHandshakePort))
+		shadowTLS := map[string]string{
+			"version":  "3",
+			"host":     firstNonEmpty(inbound.ServerName, inbound.RealityHandshakeServer),
+			"password": inbound.Password,
 		}
-		return "shadowtls://:" + url.QueryEscape(inbound.Password) + "@" + hostPort + "?" + values.Encode() + "#" + fragment, nil
+		if inbound.RealityHandshakePort > 0 && inbound.RealityHandshakePort != 443 {
+			shadowTLS["port"] = strconv.Itoa(inbound.RealityHandshakePort)
+		}
+		shadowTLSJSON, _ := json.Marshal(shadowTLS)
+		values.Set("shadow-tls", base64.RawURLEncoding.EncodeToString(shadowTLSJSON))
+		method := firstNonEmpty(inbound.Method, "aes-128-gcm")
+		userInfo := base64.RawURLEncoding.EncodeToString([]byte(method + ":" + inbound.Password))
+		return "ss://" + userInfo + "@" + hostPort + "?" + values.Encode() + "#" + fragment, nil
 	default:
 		return "", fmt.Errorf("share link is not supported for inbound protocol %s", inbound.Protocol)
 	}
+}
+
+func bestShareHost(hosts ...string) string {
+	for _, candidate := range hosts {
+		host := cleanShareHost(candidate)
+		if host == "" || isLocalShareHost(host) {
+			continue
+		}
+		return host
+	}
+	return ""
+}
+
+func cleanShareHost(candidate string) string {
+	host := strings.TrimSpace(candidate)
+	if host == "" {
+		return ""
+	}
+	if strings.Contains(host, "://") {
+		if parsed, err := url.Parse(host); err == nil {
+			host = parsed.Host
+		}
+	}
+	host = strings.TrimPrefix(host, "[")
+	host = strings.TrimSuffix(host, "]")
+	if splitHost, _, err := net.SplitHostPort(host); err == nil {
+		host = splitHost
+	}
+	return strings.Trim(strings.TrimSpace(host), "[]")
+}
+
+func isLocalShareHost(host string) bool {
+	normalized := strings.ToLower(strings.Trim(host, "[]"))
+	return normalized == "localhost" || normalized == "::1" || normalized == "0.0.0.0" || strings.HasPrefix(normalized, "127.")
 }
 
 func outboundShareLink(outbound OutboundConfig) (string, error) {
