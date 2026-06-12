@@ -191,10 +191,8 @@ func (m *Manager) ApplyConfig(cfg Config) error {
 		m.ensureHealthLocked(outbound.Name, outbound.Disabled)
 	}
 	m.rules = append([]RoutingRule(nil), cfg.Routing.Rules...)
-	if m.kernel == nil || m.kernel.Name() != kernelName(cfg.Kernel) {
-		m.kernel = NewKernel(cfg.Kernel)
-	} else {
-		m.kernel.Configure(cfg.Kernel)
+	if err := m.configureKernelLocked(cfg.Kernel); err != nil {
+		return err
 	}
 
 	if err := m.persistConfigLocked(cfg); err != nil {
@@ -383,18 +381,27 @@ func (m *Manager) UpdateKernelConfig(cfg KernelConfig) error {
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if err := m.configureKernelLocked(cfg); err != nil {
+		return err
+	}
+	m.cfg.Kernel = cfg
+	return m.commitLocked()
+}
+
+func (m *Manager) configureKernelLocked(cfg KernelConfig) error {
 	if m.kernel != nil && m.kernel.Name() != kernelName(cfg) {
 		if err := m.kernel.Stop(); err != nil {
 			return err
 		}
 		m.kernel = NewKernel(cfg)
-	} else if m.kernel == nil {
-		m.kernel = NewKernel(cfg)
-	} else {
-		m.kernel.Configure(cfg)
+		return nil
 	}
-	m.cfg.Kernel = cfg
-	return m.commitLocked()
+	if m.kernel == nil {
+		m.kernel = NewKernel(cfg)
+		return nil
+	}
+	m.kernel.Configure(cfg)
+	return nil
 }
 
 func normalizeKernelConfig(cfg KernelConfig) KernelConfig {

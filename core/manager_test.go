@@ -5,6 +5,42 @@ import (
 	"testing"
 )
 
+type testKernel struct {
+	name    string
+	stopped bool
+}
+
+func (k *testKernel) Name() string {
+	return k.name
+}
+
+func (k *testKernel) Configure(KernelConfig) {}
+
+func (k *testKernel) GenerateConfig(RuntimeState) ([]byte, error) {
+	return []byte("{}"), nil
+}
+
+func (k *testKernel) ValidateConfig(string) error {
+	return nil
+}
+
+func (k *testKernel) Start(string) error {
+	return nil
+}
+
+func (k *testKernel) Reload(string) error {
+	return nil
+}
+
+func (k *testKernel) Stop() error {
+	k.stopped = true
+	return nil
+}
+
+func (k *testKernel) Status() KernelStatus {
+	return KernelStatus{Name: k.name, Running: true}
+}
+
 func TestUpsertOutboundRenameUpdatesRouting(t *testing.T) {
 	db, err := InitDatabase(filepath.Join(t.TempDir(), "nodetools.db"))
 	if err != nil {
@@ -51,6 +87,33 @@ func TestUpsertOutboundRenameUpdatesRouting(t *testing.T) {
 	}
 	if len(snapshot.Outbounds) != 1 || snapshot.Outbounds[0].Name != "new-out" {
 		t.Fatalf("expected only renamed outbound, got %#v", snapshot.Outbounds)
+	}
+}
+
+func TestApplyConfigStopsOldKernelWhenTypeChanges(t *testing.T) {
+	db, err := InitDatabase(filepath.Join(t.TempDir(), "nodetools.db"))
+	if err != nil {
+		t.Fatalf("InitDatabase returned error: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	manager := NewManager(db, "")
+	oldKernel := &testKernel{name: "sing-box"}
+	manager.kernel = oldKernel
+
+	cfg := Config{Kernel: KernelConfig{Type: "placeholder"}}
+	cfg.Server.WebPort = 8080
+	cfg.Server.AdminUser = "admin"
+	cfg.Server.AdminPass = "password123"
+	if err := manager.ApplyConfig(cfg); err != nil {
+		t.Fatalf("ApplyConfig returned error: %v", err)
+	}
+
+	if !oldKernel.stopped {
+		t.Fatal("expected ApplyConfig to stop the old kernel before replacing it")
+	}
+	if manager.kernel == oldKernel {
+		t.Fatal("expected ApplyConfig to replace the old kernel")
 	}
 }
 
