@@ -276,6 +276,12 @@ const formatBytes = (value) => {
   return `${size.toFixed(index === 0 ? 0 : 1)} ${units[index]}`;
 };
 
+const formatLatency = (node) => {
+  if (node.latency_ms) return `${node.latency_ms} ms`;
+  if (["offline", "error", "timeout"].includes(node.status)) return "timeout";
+  return "--";
+};
+
 const escapeHTML = (value) => String(value ?? "")
   .replaceAll("&", "&amp;")
   .replaceAll("<", "&lt;")
@@ -435,22 +441,19 @@ const renderInbounds = () => {
   const rows = document.getElementById("inboundRows");
   if (!rows) return;
   const query = (document.getElementById("inboundSearch")?.value || "").toLowerCase();
-  const rules = getRules();
   const items = getInbounds().filter((node) => {
     const text = `${node.name} ${node.protocol}`.toLowerCase();
     return text.includes(query);
   });
   rows.innerHTML = items.map((node) => {
-    const rule = rules.find((item) => routingRuleMatchesInbound(item, node.name));
     return `
       <tr>
         <td>${escapeHTML(node.name)}</td>
         <td>${escapeHTML(node.protocol)}</td>
         <td>${escapeHTML(node.address || "::")}:${node.port}</td>
-        <td>${escapeHTML(rule?.outbound || state.config?.routing?.default_outbound || "direct")}</td>
         <td>${formatBytes(node.upload_bytes)}</td>
         <td>${formatBytes(node.download_bytes)}</td>
-        <td>${node.latency_ms ? `${node.latency_ms} ms` : "--"}</td>
+        <td>${formatLatency(node)}</td>
         <td><span class="badge" title="${escapeHTML(node.last_error || "")}">${escapeHTML(node.status)}</span></td>
         <td>
           <div class="row-actions">
@@ -464,7 +467,7 @@ const renderInbounds = () => {
         <td><input type="checkbox" data-node-check="inbound" value="${escapeHTML(node.name)}"${state.selected.inbound.has(node.name) ? " checked" : ""}></td>
       </tr>
     `;
-  }).join("") || `<tr><td colspan="10" class="empty-cell">还没有入站，点击“添加入站”创建本地代理端口。</td></tr>`;
+  }).join("") || `<tr><td colspan="9" class="empty-cell">还没有入站，点击“添加入站”创建本地代理端口。</td></tr>`;
 };
 
 const renderOutbounds = () => {
@@ -483,7 +486,7 @@ const renderOutbounds = () => {
       <td>${node.port || "--"}</td>
       <td>${formatBytes(node.upload_bytes)}</td>
       <td>${formatBytes(node.download_bytes)}</td>
-      <td>${node.latency_ms ? `${node.latency_ms} ms` : "--"}</td>
+      <td>${formatLatency(node)}</td>
       <td><span class="badge" title="${escapeHTML(node.last_error || "")}">${escapeHTML(node.status)}</span></td>
       <td>
         <div class="row-actions">
@@ -705,9 +708,6 @@ const routingValuePlaceholder = (matchType) => ({
 const routingRuleValue = (rule) => rule.value || rule.inbound || "";
 
 const routingRuleMatchType = (rule) => rule.match_type || (rule.inbound ? "inbound" : "domain_suffix");
-
-const routingRuleMatchesInbound = (rule, inboundName) =>
-  routingRuleMatchType(rule) === "inbound" && routingRuleValue(rule) === inboundName && !rule.disabled;
 
 const routingOutboundOptionsHTML = (current = "") => [
   `<option value="direct"${current === "direct" ? " selected" : ""}>direct</option>`,
@@ -1186,6 +1186,10 @@ document.addEventListener("click", async (event) => {
     }
     await refresh();
   } catch (error) {
+    if (button.dataset.batchAction === "test") {
+      button.textContent = "timeout";
+      return;
+    }
     alert(error.message);
   }
 });
@@ -1534,13 +1538,17 @@ document.addEventListener("click", async (event) => {
 
   const testButton = event.target.closest("[data-test-type]");
   if (testButton) {
+    const originalText = testButton.textContent;
     try {
       testButton.textContent = "测试中";
       const result = await postJSON(`/api/nodes/${encodeURIComponent(testButton.dataset.testType)}/${encodeURIComponent(testButton.dataset.testName)}/test`, {});
-      if (result.error) alert(result.error);
+      if (result.error) testButton.textContent = "timeout";
       await refresh();
     } catch (error) {
-      alert(error.message);
+      testButton.textContent = "timeout";
+      setTimeout(() => {
+        testButton.textContent = originalText;
+      }, 1200);
     }
     return;
   }
