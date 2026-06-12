@@ -1286,8 +1286,10 @@ func enabledRuntime(inbounds []InboundConfig, outbounds []OutboundConfig, routin
 		if rule.Disabled {
 			continue
 		}
-		if _, ok := enabledInboundNames[rule.Inbound]; !ok {
-			continue
+		if routingRuleMatchType(rule) == "inbound" {
+			if _, ok := enabledInboundNames[routingRuleValue(rule)]; !ok {
+				continue
+			}
 		}
 		if rule.Outbound != "direct" {
 			if _, ok := enabledOutboundNames[rule.Outbound]; !ok {
@@ -1305,5 +1307,10 @@ func enabledRuntime(inbounds []InboundConfig, outbounds []OutboundConfig, routin
 	if defaultOutbound == "" {
 		defaultOutbound = "direct"
 	}
-	return enabledInbounds, enabledOutbounds, RoutingConfig{DefaultOutbound: defaultOutbound, Rules: enabledRules}
+	return enabledInbounds, enabledOutbounds, RoutingConfig{
+		Mode:            routing.Mode,
+		Preset:          routing.Preset,
+		DefaultOutbound: defaultOutbound,
+		Rules:           enabledRules,
+	}
 }

@@ -53,3 +53,26 @@ func TestUpsertOutboundRenameUpdatesRouting(t *testing.T) {
 		t.Fatalf("expected only renamed outbound, got %#v", snapshot.Outbounds)
 	}
 }
+
+func TestEnabledRuntimeKeepsSplitRules(t *testing.T) {
+	_, _, routing := enabledRuntime(
+		[]InboundConfig{{Name: "local", Protocol: "mixed", Port: 7890}},
+		[]OutboundConfig{{Name: "proxy", Protocol: "http", Address: "127.0.0.1", Port: 8080}},
+		RoutingConfig{
+			Mode:            "rule",
+			Preset:          "bypass_cn",
+			DefaultOutbound: "proxy",
+			Rules: []RoutingRule{
+				{MatchType: "domain_suffix", Value: "google.com", Outbound: "proxy", Priority: 10},
+				{MatchType: "geoip", Value: "cn", Outbound: "direct", Priority: 20},
+				{MatchType: "inbound", Value: "missing", Inbound: "missing", Outbound: "proxy", Priority: 30},
+			},
+		},
+	)
+	if routing.Mode != "rule" || routing.Preset != "bypass_cn" {
+		t.Fatalf("expected routing metadata preserved, got %#v", routing)
+	}
+	if len(routing.Rules) != 2 {
+		t.Fatalf("expected non-inbound split rules kept and missing inbound rule filtered, got %#v", routing.Rules)
+	}
+}
