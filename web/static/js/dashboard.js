@@ -468,6 +468,7 @@ const renderOutbounds = () => {
       <td>
         <div class="row-actions">
           <button class="icon-button" data-test-type="outbound" data-test-name="${escapeHTML(node.name)}" type="button">连通测试</button>
+          <button class="icon-button" data-share-outbound="${escapeHTML(node.name)}" type="button">分享</button>
           <button class="icon-button" data-toggle-type="outbound" data-toggle-name="${escapeHTML(node.name)}" data-toggle-enabled="${node.enabled ? "false" : "true"}" type="button">${node.enabled ? "停用" : "启用"}</button>
           <button class="icon-button" data-delete-type="outbound" data-delete-name="${escapeHTML(node.name)}" type="button">删除</button>
         </div>
@@ -1347,6 +1348,17 @@ document.addEventListener("click", async (event) => {
     const host = location.hostname;
     try {
       const result = await postJSON(`/api/inbounds/${encodeURIComponent(shareInboundButton.dataset.shareInbound)}/share`, { host });
+      await showShareLink(result.name, result.link);
+    } catch (error) {
+      alert(error.message);
+    }
+    return;
+  }
+
+  const shareOutboundButton = event.target.closest("[data-share-outbound]");
+  if (shareOutboundButton) {
+    try {
+      const result = await postJSON(`/api/outbounds/${encodeURIComponent(shareOutboundButton.dataset.shareOutbound)}/share`, {});
       await showShareLink(result.name, result.link);
     } catch (error) {
       alert(error.message);

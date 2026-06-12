@@ -306,6 +306,14 @@ func RegisterAPI(mux *http.ServeMux, manager *Manager, auth *Auth) {
 		}
 		writeJSON(w, http.StatusOK, result)
 	})))
+	mux.Handle("POST /api/outbounds/{name}/share", auth.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		result, err := manager.ShareOutbound(r.PathValue("name"))
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, result)
+	})))
 	mux.Handle("PATCH /api/nodes/{type}/{name}/enabled", auth.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req NodeEnableRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {

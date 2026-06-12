@@ -57,3 +57,29 @@ func TestGenerateRealityKeyPairAndShareLinks(t *testing.T) {
 		}
 	}
 }
+
+func TestOutboundShareLinks(t *testing.T) {
+	for _, outbound := range []OutboundConfig{
+		{
+			Name: "vless-reality", Protocol: "vless", Address: "node.example.com", Port: 443,
+			UUID: "bf000d23-0752-40b4-affe-68f7707a9661", Security: "reality",
+			ServerName: "addons.mozilla.org", PublicKey: "pubkey", ShortID: "abcd",
+		},
+		{Name: "vmess-ws", Protocol: "vmess", Address: "node.example.com", Port: 443, UUID: "bf000d23-0752-40b4-affe-68f7707a9661", Transport: "ws", Path: "/ws", Host: "cdn.example.com", TLS: true},
+		{Name: "trojan", Protocol: "trojan", Address: "node.example.com", Port: 443, Password: "secret", ServerName: "example.com", TLS: true},
+		{Name: "ss", Protocol: "shadowsocks", Address: "node.example.com", Port: 8388, Method: "aes-256-gcm", Password: "secret"},
+		{Name: "shadowtls", Protocol: "shadowtls", Address: "node.example.com", Port: 8443, Password: "secret", ServerName: "addons.mozilla.org"},
+		{Name: "anytls", Protocol: "anytls", Address: "node.example.com", Port: 8443, Password: "secret", ServerName: "addons.mozilla.org"},
+		{Name: "hysteria2", Protocol: "hysteria2", Address: "node.example.com", Port: 8443, Password: "secret", ServerName: "addons.mozilla.org", UpMbps: 100, DownMbps: 500},
+		{Name: "tuic", Protocol: "tuic", Address: "node.example.com", Port: 8443, UUID: "bf000d23-0752-40b4-affe-68f7707a9661", Password: "secret", ServerName: "addons.mozilla.org"},
+		{Name: "http", Protocol: "http", Address: "node.example.com", Port: 8080, Username: "user", Password: "secret"},
+	} {
+		link, err := outboundShareLink(outbound)
+		if err != nil {
+			t.Fatalf("outboundShareLink returned error for %s: %v", outbound.Protocol, err)
+		}
+		if link == "" || !strings.Contains(link, "://") {
+			t.Fatalf("unexpected empty or invalid %s link: %s", outbound.Protocol, link)
+		}
+	}
+}
