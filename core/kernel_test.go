@@ -126,6 +126,10 @@ func TestSingBoxKernelGenerateConfig(t *testing.T) {
 	if hy2["server_ports"] == nil || hy2["up_mbps"] != float64(100) || hy2["down_mbps"] != float64(500) {
 		t.Fatalf("expected hysteria2 port hopping and bandwidth fields, got %#v", hy2)
 	}
+	serverPorts := hy2["server_ports"].([]any)
+	if serverPorts[1] != "30000:30100" {
+		t.Fatalf("expected sing-box port range format, got %#v", serverPorts)
+	}
 	tuic := outbounds[5].(map[string]any)
 	if tuic["congestion_control"] != "bbr" || tuic["udp_relay_mode"] != "native" {
 		t.Fatalf("expected tuic defaults, got %#v", tuic)

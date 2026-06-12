@@ -612,7 +612,7 @@ func singBoxOutbounds(outbounds []OutboundConfig) []map[string]any {
 			base["type"] = "hysteria2"
 			base["password"] = outbound.Password
 			if outbound.MPort != "" {
-				base["server_ports"] = splitCSV(outbound.MPort)
+				base["server_ports"] = singBoxPortRanges(outbound.MPort)
 			}
 			if outbound.UpMbps > 0 {
 				base["up_mbps"] = outbound.UpMbps
@@ -871,6 +871,24 @@ func splitInts(value string) []int {
 		if err == nil && number > 0 && number <= 65535 {
 			out = append(out, number)
 		}
+	}
+	return out
+}
+
+func singBoxPortRanges(value string) []string {
+	parts := splitCSV(value)
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if strings.Contains(part, "-") {
+			bounds := strings.SplitN(part, "-", 2)
+			left, leftErr := strconv.Atoi(strings.TrimSpace(bounds[0]))
+			right, rightErr := strconv.Atoi(strings.TrimSpace(bounds[1]))
+			if leftErr == nil && rightErr == nil && left > 0 && right > 0 && left <= right && right <= 65535 {
+				out = append(out, fmt.Sprintf("%d:%d", left, right))
+				continue
+			}
+		}
+		out = append(out, part)
 	}
 	return out
 }
