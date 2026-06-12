@@ -47,3 +47,30 @@ func TestAuthMigratesAndChangesPassword(t *testing.T) {
 		t.Fatal("new password should work")
 	}
 }
+
+func TestAuthSecurityStatusAndLoginLimit(t *testing.T) {
+	db, err := InitDatabase(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatalf("InitDatabase returned error: %v", err)
+	}
+	defer db.Close()
+
+	auth := NewAuth(db)
+	if err := auth.EnsureAdmin("admin", "password123"); err != nil {
+		t.Fatalf("EnsureAdmin returned error: %v", err)
+	}
+	var cfg Config
+	cfg.Server.AdminUser = "admin"
+	status := auth.SecurityStatus("admin", cfg)
+	if !status.DefaultPassword || !status.EmptyBootstrapPass || len(status.Warnings) == 0 {
+		t.Fatalf("expected security warnings for default setup, got %#v", status)
+	}
+	for i := 0; i < status.LoginFailureLimit; i++ {
+		if auth.Login(httptest.NewRecorder(), "admin", "wrong") {
+			t.Fatal("wrong password should not login")
+		}
+	}
+	if auth.Login(httptest.NewRecorder(), "admin", "password123") {
+		t.Fatal("login should be rate limited after repeated failures")
+	}
+}

@@ -291,6 +291,24 @@ th {
   color: var(--muted);
 }
 
+.badge-danger {
+  background: rgba(162, 59, 42, 0.12);
+  color: var(--danger);
+}
+
+.node-name {
+  font-weight: 800;
+}
+
+.node-hint {
+  max-width: 420px;
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: normal;
+}
+
 .import-panel {
   border-color: rgba(22, 135, 125, 0.35);
 }
@@ -365,6 +383,22 @@ th {
   color: var(--muted);
   font-size: 13px;
   font-weight: 800;
+}
+
+.routing-preview {
+  display: grid;
+  grid-template-columns: minmax(160px, 1fr) minmax(220px, 1.4fr) minmax(110px, 0.7fr) minmax(110px, 0.7fr) auto;
+  gap: 12px;
+  align-items: end;
+  padding: 0 18px 18px;
+}
+
+.routing-preview .preview-box {
+  grid-column: 1 / -1;
+}
+
+.diagnostics-box {
+  margin: 18px;
 }
 
 .routing-disabled {
@@ -611,6 +645,7 @@ pre {
   .system-grid,
   .deploy-output,
   .routing-controls,
+  .routing-preview,
   .settings-grid,
   .modal-body.two-column,
   .dynamic-fields {

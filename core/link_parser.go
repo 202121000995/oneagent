@@ -17,9 +17,13 @@ type ImportLinksRequest struct {
 }
 
 type ImportLinksResponse struct {
-	Imported []Node   `json:"imported"`
-	Parsed   int      `json:"parsed"`
-	Errors   []string `json:"errors,omitempty"`
+	Imported  []Node                 `json:"imported"`
+	Parsed    int                    `json:"parsed"`
+	Added     int                    `json:"added"`
+	Updated   int                    `json:"updated"`
+	Unchanged int                    `json:"unchanged"`
+	Details   []ImportOutboundDetail `json:"details,omitempty"`
+	Errors    []string               `json:"errors,omitempty"`
 }
 
 func ParseOutboundLinks(text string) ([]OutboundConfig, []string) {

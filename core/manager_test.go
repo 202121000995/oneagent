@@ -126,6 +126,90 @@ func TestApplyConfigEnrichesOutboundFromRawFlow(t *testing.T) {
 	}
 }
 
+func TestImportOutboundsReportPreservesManualName(t *testing.T) {
+	db, err := InitDatabase(filepath.Join(t.TempDir(), "nodetools.db"))
+	if err != nil {
+		t.Fatalf("InitDatabase returned error: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	manager := NewManager(db, "")
+	cfg := Config{
+		Outbounds: []OutboundConfig{{
+			Name:       "manual-name",
+			Protocol:   "vless",
+			Address:    "45.139.193.187",
+			Port:       8881,
+			UUID:       "cbf378ef-bbf8-4539-a564-31c6f0173142",
+			Flow:       "xtls-rprx-vision",
+			Security:   "reality",
+			TLS:        true,
+			ServerName: "addons.mozilla.org",
+			PublicKey:  "pub",
+		}},
+	}
+	cfg.Server.WebPort = 8080
+	cfg.Server.AdminUser = "admin"
+	cfg.Server.AdminPass = "password123"
+	if err := manager.ApplyConfig(cfg); err != nil {
+		t.Fatalf("ApplyConfig returned error: %v", err)
+	}
+
+	report, err := manager.ImportOutboundsReport([]OutboundConfig{{
+		Name:       "subscription-name",
+		Protocol:   "vless",
+		Address:    "45.139.193.187",
+		Port:       8881,
+		UUID:       "cbf378ef-bbf8-4539-a564-31c6f0173142",
+		Flow:       "xtls-rprx-vision",
+		Security:   "reality",
+		TLS:        true,
+		ServerName: "addons.mozilla.org",
+		PublicKey:  "pub",
+	}})
+	if err != nil {
+		t.Fatalf("ImportOutboundsReport returned error: %v", err)
+	}
+	if report.Unchanged != 1 || len(report.Details) != 1 || report.Details[0].Name != "manual-name" || !report.Details[0].PreservedName {
+		t.Fatalf("expected manual name preserved, got %#v", report)
+	}
+}
+
+func TestPreviewRoutingExplainsFinalOutbound(t *testing.T) {
+	db, err := InitDatabase(filepath.Join(t.TempDir(), "nodetools.db"))
+	if err != nil {
+		t.Fatalf("InitDatabase returned error: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	manager := NewManager(db, "")
+	cfg := Config{
+		Kernel:    KernelConfig{Type: "sing-box"},
+		Inbounds:  []InboundConfig{{Name: "local", Protocol: "mixed", Port: 1080}},
+		Outbounds: []OutboundConfig{{Name: "proxy", Protocol: "http", Address: "127.0.0.1", Port: 8080}},
+		Routing: RoutingConfig{
+			Mode:            "rule",
+			DefaultOutbound: "proxy",
+			Rules: []RoutingRule{
+				{Name: "direct-cn", MatchType: "domain_suffix", Value: "cn", Outbound: "direct", Priority: 10},
+				{Name: "geo-cn", MatchType: "geosite", Value: "cn", Outbound: "direct", Priority: 20},
+			},
+		},
+	}
+	cfg.Server.WebPort = 8080
+	cfg.Server.AdminUser = "admin"
+	cfg.Server.AdminPass = "password123"
+	manager.cfg = cfg
+	preview := manager.PreviewRouting(RoutingPreviewRequest{Inbound: "local", Target: "example.cn", Protocol: "tcp", Port: 443})
+	if preview.Outbound != "direct" || preview.MatchedRule != "direct-cn" {
+		t.Fatalf("expected direct-cn match, got %#v", preview)
+	}
+	preview = manager.PreviewRouting(RoutingPreviewRequest{Inbound: "local", Target: "google.com", Protocol: "tcp", Port: 443})
+	if preview.Outbound != "proxy" || len(preview.Warnings) == 0 {
+		t.Fatalf("expected default proxy with geosite warning, got %#v", preview)
+	}
+}
+
 func TestProbeInboundGoogleUnsupportedProtocol(t *testing.T) {
 	health := probeHTTPProxyInboundGoogle(InboundConfig{Name: "vless-in", Protocol: "forward-tcp", Port: 443})
 	if health.Status != "unsupported" {

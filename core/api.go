@@ -91,6 +91,10 @@ func RegisterAPI(mux *http.ServeMux, manager *Manager, auth *Auth) {
 	mux.Handle("GET /api/me", auth.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]bool{"authenticated": true})
 	})))
+	mux.Handle("GET /api/security/status", auth.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		cfg := manager.ConfigSnapshot()
+		writeJSON(w, http.StatusOK, auth.SecurityStatus(cfg.Server.AdminUser, cfg))
+	})))
 	mux.Handle("POST /api/password/change", auth.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req ChangePasswordRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -175,6 +179,14 @@ func RegisterAPI(mux *http.ServeMux, manager *Manager, auth *Auth) {
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"status": "saved", "routing": manager.ConfigSnapshot().Routing})
+	})))
+	mux.Handle("POST /api/routing/preview", auth.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req RoutingPreviewRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid json body")
+			return
+		}
+		writeJSON(w, http.StatusOK, manager.PreviewRouting(req))
 	})))
 	mux.Handle("POST /api/subscription/preview", auth.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req SubscriptionPreviewRequest
@@ -279,12 +291,20 @@ func RegisterAPI(mux *http.ServeMux, manager *Manager, auth *Auth) {
 			return
 		}
 		outbounds, parseErrors := ParseOutboundLinks(req.Text)
-		nodes, err := manager.ImportOutbounds(outbounds)
+		report, err := manager.ImportOutboundsReport(outbounds)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		writeJSON(w, http.StatusCreated, ImportLinksResponse{Imported: nodes, Parsed: len(outbounds), Errors: parseErrors})
+		writeJSON(w, http.StatusCreated, ImportLinksResponse{
+			Imported:  report.Imported,
+			Parsed:    report.Parsed,
+			Added:     report.Added,
+			Updated:   report.Updated,
+			Unchanged: report.Unchanged,
+			Details:   report.Details,
+			Errors:    parseErrors,
+		})
 	})))
 	mux.Handle("POST /api/nodes/{type}/{name}/test", auth.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		result, err := manager.TestNode(r.PathValue("type"), r.PathValue("name"))
@@ -314,6 +334,14 @@ func RegisterAPI(mux *http.ServeMux, manager *Manager, auth *Auth) {
 	})))
 	mux.Handle("POST /api/outbounds/{name}/share", auth.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		result, err := manager.ShareOutbound(r.PathValue("name"))
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, result)
+	})))
+	mux.Handle("GET /api/outbounds/{name}/inspect", auth.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		result, err := manager.InspectOutbound(r.PathValue("name"))
 		if err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return

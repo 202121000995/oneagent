@@ -27,6 +27,8 @@ type Node struct {
 	Status        string `json:"status"`
 	LatencyMS     int64  `json:"latency_ms"`
 	LastError     string `json:"last_error,omitempty"`
+	Diagnosis     string `json:"diagnosis,omitempty"`
+	DiagnosisHint string `json:"diagnosis_hint,omitempty"`
 	UploadBytes   int64  `json:"upload_bytes"`
 	DownloadBytes int64  `json:"download_bytes"`
 	UpdatedAt     string `json:"updated_at"`
@@ -81,6 +83,8 @@ type NodeTestResult struct {
 	Status    string `json:"status"`
 	LatencyMS int64  `json:"latency_ms"`
 	Error     string `json:"error,omitempty"`
+	Diagnosis string `json:"diagnosis,omitempty"`
+	Hint      string `json:"hint,omitempty"`
 	UpdatedAt string `json:"updated_at"`
 }
 
@@ -89,8 +93,63 @@ type SubscriptionUpdateResult struct {
 	URL           string   `json:"url"`
 	Parsed        int      `json:"parsed"`
 	Imported      int      `json:"imported"`
+	Added         int      `json:"added"`
+	Updated       int      `json:"updated"`
+	Unchanged     int      `json:"unchanged"`
 	ImportedNodes []string `json:"imported_nodes,omitempty"`
 	Errors        []string `json:"errors,omitempty"`
+	Warnings      []string `json:"warnings,omitempty"`
+}
+
+type ImportOutboundDetail struct {
+	Name          string   `json:"name"`
+	OriginalName  string   `json:"original_name,omitempty"`
+	Protocol      string   `json:"protocol"`
+	Address       string   `json:"address"`
+	Port          int      `json:"port"`
+	Action        string   `json:"action"`
+	PreservedName bool     `json:"preserved_name,omitempty"`
+	Warnings      []string `json:"warnings,omitempty"`
+}
+
+type ImportOutboundsReport struct {
+	Imported  []Node                 `json:"imported"`
+	Parsed    int                    `json:"parsed"`
+	Added     int                    `json:"added"`
+	Updated   int                    `json:"updated"`
+	Unchanged int                    `json:"unchanged"`
+	Details   []ImportOutboundDetail `json:"details,omitempty"`
+}
+
+type RoutingPreviewRequest struct {
+	Inbound  string `json:"inbound"`
+	Target   string `json:"target"`
+	Protocol string `json:"protocol"`
+	Port     int    `json:"port"`
+}
+
+type RoutingPreviewResult struct {
+	Mode        string   `json:"mode"`
+	Inbound     string   `json:"inbound,omitempty"`
+	Target      string   `json:"target,omitempty"`
+	Protocol    string   `json:"protocol,omitempty"`
+	Port        int      `json:"port,omitempty"`
+	Outbound    string   `json:"outbound"`
+	Reason      string   `json:"reason"`
+	MatchedRule string   `json:"matched_rule,omitempty"`
+	MatchType   string   `json:"match_type,omitempty"`
+	Value       string   `json:"value,omitempty"`
+	Priority    int      `json:"priority,omitempty"`
+	Warnings    []string `json:"warnings,omitempty"`
+}
+
+type OutboundInspection struct {
+	Name     string            `json:"name"`
+	Protocol string            `json:"protocol"`
+	Saved    map[string]string `json:"saved"`
+	Raw      map[string]string `json:"raw,omitempty"`
+	Missing  []string          `json:"missing,omitempty"`
+	Warnings []string          `json:"warnings,omitempty"`
 }
 
 func NewManager(db *sql.DB, configPath string) *Manager {
@@ -222,6 +281,7 @@ func (m *Manager) ListNodes() []Node {
 		inbound := m.inbounds[name]
 		traffic := m.traffic[inbound.Name]
 		health := m.health[inbound.Name]
+		diagnosis, hint := diagnoseHealth(health)
 		nodes = append(nodes, Node{
 			Name:          inbound.Name,
 			Type:          "inbound",
@@ -232,6 +292,8 @@ func (m *Manager) ListNodes() []Node {
 			Status:        health.Status,
 			LatencyMS:     health.LatencyMS,
 			LastError:     health.LastError,
+			Diagnosis:     diagnosis,
+			DiagnosisHint: hint,
 			UploadBytes:   traffic.UploadBytes,
 			DownloadBytes: traffic.DownloadBytes,
 			UpdatedAt:     traffic.UpdatedAt.Format(time.RFC3339),
@@ -246,6 +308,7 @@ func (m *Manager) ListNodes() []Node {
 		outbound := m.outbounds[name]
 		traffic := m.traffic[outbound.Name]
 		health := m.health[outbound.Name]
+		diagnosis, hint := diagnoseHealth(health)
 		nodes = append(nodes, Node{
 			Name:          outbound.Name,
 			Type:          "outbound",
@@ -256,6 +319,8 @@ func (m *Manager) ListNodes() []Node {
 			Status:        health.Status,
 			LatencyMS:     health.LatencyMS,
 			LastError:     health.LastError,
+			Diagnosis:     diagnosis,
+			DiagnosisHint: hint,
 			UploadBytes:   traffic.UploadBytes,
 			DownloadBytes: traffic.DownloadBytes,
 			UpdatedAt:     traffic.UpdatedAt.Format(time.RFC3339),
@@ -558,44 +623,83 @@ func (m *Manager) UpsertOutbound(outbound OutboundConfig) (Node, error) {
 }
 
 func (m *Manager) ImportOutbounds(outbounds []OutboundConfig) ([]Node, error) {
+	report, err := m.ImportOutboundsReport(outbounds)
+	if err != nil {
+		return nil, err
+	}
+	return report.Imported, nil
+}
+
+func (m *Manager) ImportOutboundsReport(outbounds []OutboundConfig) (ImportOutboundsReport, error) {
 	if len(outbounds) == 0 {
-		return nil, fmt.Errorf("no outbounds to import")
+		return ImportOutboundsReport{}, fmt.Errorf("no outbounds to import")
 	}
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	imported := make([]Node, 0, len(outbounds))
+	report := ImportOutboundsReport{
+		Parsed:   len(outbounds),
+		Imported: make([]Node, 0, len(outbounds)),
+		Details:  make([]ImportOutboundDetail, 0, len(outbounds)),
+	}
 	for _, outbound := range outbounds {
+		outbound = enrichOutboundFromRaw(outbound)
+		originalName := outbound.Name
+		action := "added"
+		preservedName := false
 		if outbound.Name == "" {
 			outbound.Name = outbound.Protocol + "-" + outbound.Address
 		}
 		if existing := m.findEquivalentOutboundLocked(outbound); existing != "" {
+			action = "updated"
+			if existingConfig, ok := m.outbounds[existing]; ok && outboundConfigEquivalent(existingConfig, outbound) {
+				action = "unchanged"
+			}
+			preservedName = existing != originalName
 			outbound.Name = existing
 		} else {
 			outbound.Name = m.uniqueOutboundNameLocked(outbound.Name)
 		}
 		if outbound.Protocol == "" {
-			return nil, fmt.Errorf("protocol is required for %q", outbound.Name)
+			return ImportOutboundsReport{}, fmt.Errorf("protocol is required for %q", outbound.Name)
 		}
 		if outbound.Address == "" {
-			return nil, fmt.Errorf("address is required for %q", outbound.Name)
+			return ImportOutboundsReport{}, fmt.Errorf("address is required for %q", outbound.Name)
 		}
 		if outbound.Port < 1 || outbound.Port > 65535 {
-			return nil, fmt.Errorf("valid port is required for %q", outbound.Name)
+			return ImportOutboundsReport{}, fmt.Errorf("valid port is required for %q", outbound.Name)
 		}
 		if err := outbound.Validate(); err != nil {
-			return nil, err
+			return ImportOutboundsReport{}, err
 		}
 		m.outbounds[outbound.Name] = outbound
 		m.cfg.Outbounds = upsertOutboundConfig(m.cfg.Outbounds, outbound)
 		m.ensureTrafficLocked(outbound.Name)
 		m.ensureHealthLocked(outbound.Name, outbound.Disabled)
-		imported = append(imported, m.nodeLocked(outbound.Name, "outbound"))
+		report.Imported = append(report.Imported, m.nodeLocked(outbound.Name, "outbound"))
+		switch action {
+		case "added":
+			report.Added++
+		case "updated":
+			report.Updated++
+		case "unchanged":
+			report.Unchanged++
+		}
+		report.Details = append(report.Details, ImportOutboundDetail{
+			Name:          outbound.Name,
+			OriginalName:  originalName,
+			Protocol:      outbound.Protocol,
+			Address:       outbound.Address,
+			Port:          outbound.Port,
+			Action:        action,
+			PreservedName: preservedName,
+			Warnings:      outboundImportWarnings(outbound),
+		})
 	}
 	if err := m.commitLocked(); err != nil {
-		return nil, err
+		return ImportOutboundsReport{}, err
 	}
-	return imported, nil
+	return report, nil
 }
 
 func (m *Manager) UpdateSubscriptions() ([]SubscriptionUpdateResult, error) {
@@ -622,12 +726,18 @@ func (m *Manager) UpdateSubscriptions() ([]SubscriptionUpdateResult, error) {
 		result.Parsed = len(outbounds)
 		result.Errors = append(result.Errors, parseErrors...)
 		if len(outbounds) > 0 {
-			nodes, importErr := m.ImportOutbounds(outbounds)
+			report, importErr := m.ImportOutboundsReport(outbounds)
 			if importErr != nil {
 				result.Errors = append(result.Errors, importErr.Error())
 			} else {
-				result.Imported = len(nodes)
-				for _, node := range nodes {
+				result.Imported = len(report.Imported)
+				result.Added = report.Added
+				result.Updated = report.Updated
+				result.Unchanged = report.Unchanged
+				for _, detail := range report.Details {
+					result.Warnings = append(result.Warnings, detail.Warnings...)
+				}
+				for _, node := range report.Imported {
 					result.ImportedNodes = append(result.ImportedNodes, node.Name)
 				}
 			}
@@ -643,6 +753,205 @@ func (m *Manager) UpdateRoutingConfig(routing RoutingConfig) error {
 	m.cfg.Routing = routing
 	m.rules = append([]RoutingRule(nil), routing.Rules...)
 	return m.commitLocked()
+}
+
+func (m *Manager) PreviewRouting(req RoutingPreviewRequest) RoutingPreviewResult {
+	m.mu.RLock()
+	cfg := m.cfg
+	m.mu.RUnlock()
+
+	mode := routingMode(cfg.Routing.Mode)
+	if mode == "" {
+		mode = "rule"
+	}
+	defaultOutbound := firstNonEmpty(cfg.Routing.DefaultOutbound, "direct")
+	result := RoutingPreviewResult{
+		Mode:     mode,
+		Inbound:  req.Inbound,
+		Target:   req.Target,
+		Protocol: req.Protocol,
+		Port:     req.Port,
+		Outbound: defaultOutbound,
+	}
+	if mode == "direct" {
+		result.Outbound = "direct"
+		result.Reason = "全部直连模式，默认出站和规则都不会生效。"
+		return result
+	}
+	if mode == "global" {
+		result.Reason = "全局代理模式，所有流量都走默认出站。"
+		return result
+	}
+	if cfg.Kernel.Type == "sing-box" {
+		for _, rule := range cfg.Routing.Rules {
+			matchType := routingRuleMatchType(rule)
+			if !rule.Disabled && (matchType == "geoip" || matchType == "geosite") {
+				result.Warnings = append(result.Warnings, "当前 sing-box 生成器暂不写入 GeoIP/Geosite 规则；这类规则在 sing-box 下不会实际生效。")
+				break
+			}
+		}
+	}
+	for _, rule := range sortedRoutingRules(cfg.Routing.Rules) {
+		if rule.Disabled {
+			continue
+		}
+		if routingRuleMatches(rule, req) {
+			result.Outbound = rule.Outbound
+			result.MatchedRule = firstNonEmpty(rule.Name, fmt.Sprintf("%s-%d", routingRuleMatchType(rule), rule.Priority))
+			result.MatchType = routingRuleMatchType(rule)
+			result.Value = routingRuleValue(rule)
+			result.Priority = rule.Priority
+			result.Reason = "命中分流规则，按该规则选择出站。"
+			return result
+		}
+	}
+	result.Reason = "没有命中启用规则，走默认出站。"
+	return result
+}
+
+func routingRuleMatches(rule RoutingRule, req RoutingPreviewRequest) bool {
+	matchType := routingRuleMatchType(rule)
+	values := splitCSV(routingRuleValue(rule))
+	if len(values) == 0 {
+		return false
+	}
+	target := strings.ToLower(strings.TrimSpace(req.Target))
+	if host, _, err := net.SplitHostPort(target); err == nil {
+		target = host
+	}
+	switch matchType {
+	case "inbound":
+		for _, value := range values {
+			if value == req.Inbound {
+				return true
+			}
+		}
+	case "domain":
+		for _, value := range values {
+			if strings.EqualFold(strings.TrimSpace(value), target) {
+				return true
+			}
+		}
+	case "domain_suffix":
+		for _, value := range values {
+			suffix := strings.TrimPrefix(strings.ToLower(strings.TrimSpace(value)), ".")
+			if target == suffix || strings.HasSuffix(target, "."+suffix) {
+				return true
+			}
+		}
+	case "domain_keyword":
+		for _, value := range values {
+			if strings.Contains(target, strings.ToLower(strings.TrimSpace(value))) {
+				return true
+			}
+		}
+	case "ip_cidr":
+		ip := net.ParseIP(target)
+		if ip == nil {
+			return false
+		}
+		for _, value := range values {
+			_, cidr, err := net.ParseCIDR(value)
+			if err == nil && cidr.Contains(ip) {
+				return true
+			}
+		}
+	case "port":
+		for _, value := range splitInts(strings.Join(values, ",")) {
+			if value == req.Port {
+				return true
+			}
+		}
+	case "protocol":
+		for _, value := range values {
+			if strings.EqualFold(value, req.Protocol) {
+				return true
+			}
+		}
+	case "geosite":
+		for _, value := range values {
+			if strings.EqualFold(value, "cn") && (target == "cn" || strings.HasSuffix(target, ".cn")) {
+				return true
+			}
+		}
+	case "geoip":
+		ip := net.ParseIP(target)
+		for _, value := range values {
+			if strings.EqualFold(value, "cn") && ip != nil && isPrivateOrChinaPreviewIP(ip) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func isPrivateOrChinaPreviewIP(ip net.IP) bool {
+	return ip.IsPrivate() || ip.IsLoopback()
+}
+
+func (m *Manager) InspectOutbound(name string) (OutboundInspection, error) {
+	m.mu.RLock()
+	outbound, ok := m.outbounds[name]
+	m.mu.RUnlock()
+	if !ok {
+		return OutboundInspection{}, fmt.Errorf("outbound %q does not exist", name)
+	}
+	inspection := OutboundInspection{
+		Name:     outbound.Name,
+		Protocol: outbound.Protocol,
+		Saved:    outboundFieldMap(outbound),
+		Warnings: outboundImportWarnings(outbound),
+	}
+	if strings.Contains(outbound.Raw, "://") {
+		parsed, err := parseOutboundLink(outbound.Raw)
+		if err == nil {
+			inspection.Raw = outboundFieldMap(parsed)
+			for key, rawValue := range inspection.Raw {
+				if rawValue != "" && inspection.Saved[key] == "" {
+					inspection.Missing = append(inspection.Missing, key)
+				}
+			}
+		} else {
+			inspection.Warnings = append(inspection.Warnings, "原始链接无法重新解析: "+err.Error())
+		}
+	}
+	return inspection, nil
+}
+
+func outboundFieldMap(outbound OutboundConfig) map[string]string {
+	return map[string]string{
+		"name":             outbound.Name,
+		"protocol":         outbound.Protocol,
+		"address":          outbound.Address,
+		"port":             fmt.Sprintf("%d", outbound.Port),
+		"uuid":             outbound.UUID,
+		"password":         secretDisplay(outbound.Password),
+		"method":           outbound.Method,
+		"flow":             outbound.Flow,
+		"security":         outbound.Security,
+		"tls":              fmt.Sprintf("%t", outbound.TLS),
+		"server_name":      outbound.ServerName,
+		"skip_cert_verify": fmt.Sprintf("%t", outbound.SkipCertVerify),
+		"transport":        outbound.Transport,
+		"path":             outbound.Path,
+		"host":             outbound.Host,
+		"public_key":       outbound.PublicKey,
+		"short_id":         outbound.ShortID,
+		"fingerprint":      outbound.Fingerprint,
+		"alpn":             outbound.ALPN,
+		"obfs":             outbound.Obfs,
+		"obfs_password":    secretDisplay(outbound.ObfsPassword),
+		"mport":            outbound.MPort,
+		"congestion":       outbound.Congestion,
+		"udp_relay_mode":   outbound.UDPRelayMode,
+	}
+}
+
+func secretDisplay(value string) string {
+	if value == "" {
+		return ""
+	}
+	return "<已设置>"
 }
 
 func (m *Manager) DeleteNode(nodeType, name string) error {
@@ -737,12 +1046,15 @@ func (m *Manager) TestNode(nodeType, name string) (NodeTestResult, error) {
 	m.mu.Lock()
 	m.health[name] = health
 	m.mu.Unlock()
+	diagnosis, hint := diagnoseHealth(health)
 	return NodeTestResult{
 		Name:      name,
 		Type:      nodeType,
 		Status:    health.Status,
 		LatencyMS: health.LatencyMS,
 		Error:     health.LastError,
+		Diagnosis: diagnosis,
+		Hint:      hint,
 		UpdatedAt: health.UpdatedAt.Format(time.RFC3339),
 	}, nil
 }
@@ -1134,6 +1446,45 @@ func compactError(value string) string {
 	return value
 }
 
+func diagnoseHealth(health Health) (string, string) {
+	status := strings.ToLower(strings.TrimSpace(health.Status))
+	message := strings.ToLower(health.LastError)
+	if status == "" || status == "unknown" {
+		return "未测试", "点击测试按钮后会显示真实连通情况。"
+	}
+	if status == "online" {
+		return "正常", "链路测试通过。"
+	}
+	if status == "disabled" {
+		return "已停用", "节点已停用，不会写入运行配置。"
+	}
+	if strings.Contains(message, "field") || strings.Contains(message, "字段") || strings.Contains(message, "requires") || strings.Contains(message, "配置校验") || strings.Contains(message, "bad key") {
+		return "配置参数错误", "检查协议字段是否完整，尤其是 Reality public key、short id、flow、SNI、密码和加密方式。"
+	}
+	if strings.Contains(message, "reality") || strings.Contains(message, "utls") || strings.Contains(message, "public_key") || strings.Contains(message, "short_id") {
+		return "Reality 参数错误", "检查 pbk/public key、sid/short id、SNI、fingerprint 和 flow 是否与服务端一致。"
+	}
+	if strings.Contains(message, "tls handshake") || strings.Contains(message, "certificate") || strings.Contains(message, "x509") {
+		return "TLS 握手失败", "检查 SNI、证书、是否需要跳过证书校验，以及客户端是否支持该协议。"
+	}
+	if strings.Contains(message, "i/o timeout") || strings.Contains(message, "timeout") || strings.Contains(message, "deadline") {
+		return "连接超时", "检查节点端口、安全组、防火墙、目标节点是否在线，以及当前 VPS 到目标节点网络。"
+	}
+	if strings.Contains(message, "no such host") || strings.Contains(message, "dns") {
+		return "DNS 解析失败", "检查节点域名、VPS DNS 或订阅节点是否已经失效。"
+	}
+	if strings.Contains(message, "connection refused") || strings.Contains(message, "connect: refused") {
+		return "端口拒绝连接", "目标端口未监听，或节点服务没有启动。"
+	}
+	if strings.Contains(message, "http 状态异常") || strings.Contains(message, "http status") || strings.Contains(message, "http_") || strings.Contains(message, "502") {
+		return "上游返回异常", "代理链路连上了，但上游出口访问测试地址失败；优先测试该出站节点本身。"
+	}
+	if strings.Contains(message, "unsupported") || strings.Contains(message, "暂不支持") {
+		return "暂不支持自动测试", "该协议需要专用客户端握手，当前只能做配置校验或端口探测。"
+	}
+	return "测试失败", "查看详细错误，并优先单独测试出站节点。"
+}
+
 func probeTCP(address string, disabled bool) Health {
 	now := time.Now()
 	if disabled {
@@ -1310,6 +1661,7 @@ func (m *Manager) ensureHealthLocked(name string, disabled bool) {
 
 func (m *Manager) nodeLocked(name string, nodeType string) Node {
 	traffic := m.traffic[name]
+	diagnosis, hint := diagnoseHealth(m.health[name])
 	if nodeType == "inbound" {
 		inbound := m.inbounds[name]
 		return Node{
@@ -1322,6 +1674,8 @@ func (m *Manager) nodeLocked(name string, nodeType string) Node {
 			Status:        m.health[name].Status,
 			LatencyMS:     m.health[name].LatencyMS,
 			LastError:     m.health[name].LastError,
+			Diagnosis:     diagnosis,
+			DiagnosisHint: hint,
 			UploadBytes:   traffic.UploadBytes,
 			DownloadBytes: traffic.DownloadBytes,
 			UpdatedAt:     traffic.UpdatedAt.Format(time.RFC3339),
@@ -1338,6 +1692,8 @@ func (m *Manager) nodeLocked(name string, nodeType string) Node {
 		Status:        m.health[name].Status,
 		LatencyMS:     m.health[name].LatencyMS,
 		LastError:     m.health[name].LastError,
+		Diagnosis:     diagnosis,
+		DiagnosisHint: hint,
 		UploadBytes:   traffic.UploadBytes,
 		DownloadBytes: traffic.DownloadBytes,
 		UpdatedAt:     traffic.UpdatedAt.Format(time.RFC3339),
@@ -1463,6 +1819,46 @@ func outboundSignature(outbound OutboundConfig) string {
 		outbound.ShortID,
 		outbound.Transport,
 	)
+}
+
+func outboundConfigEquivalent(a, b OutboundConfig) bool {
+	return outboundSignature(a) == outboundSignature(b) &&
+		a.Flow == b.Flow &&
+		a.Fingerprint == b.Fingerprint &&
+		a.ALPN == b.ALPN &&
+		a.Path == b.Path &&
+		a.Host == b.Host &&
+		a.SkipCertVerify == b.SkipCertVerify
+}
+
+func outboundImportWarnings(outbound OutboundConfig) []string {
+	var warnings []string
+	switch outbound.Protocol {
+	case "vless":
+		if outbound.Security == "reality" || outbound.PublicKey != "" {
+			if outbound.PublicKey == "" {
+				warnings = append(warnings, "Reality 缺少 public key/pbk")
+			}
+			if outbound.ServerName == "" {
+				warnings = append(warnings, "Reality 缺少 SNI/server_name")
+			}
+			if outbound.Fingerprint == "" {
+				warnings = append(warnings, "Reality 未指定 fingerprint，将默认使用 chrome")
+			}
+			if strings.Contains(strings.ToLower(outbound.Raw), "xtls") && outbound.Flow == "" {
+				warnings = append(warnings, "原始链接包含 XTLS，但未解析到 flow")
+			}
+		}
+	case "shadowsocks", "ss":
+		if outbound.Method == "" {
+			warnings = append(warnings, "Shadowsocks 缺少加密方法")
+		}
+	case "hysteria2", "tuic", "anytls", "trojan":
+		if outbound.ServerName == "" && outbound.TLS {
+			warnings = append(warnings, "TLS 节点缺少 SNI/server_name")
+		}
+	}
+	return warnings
 }
 
 func nextRulePriority(rules []RoutingRule) int {

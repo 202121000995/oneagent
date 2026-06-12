@@ -282,6 +282,19 @@ const formatLatency = (node) => {
   return "--";
 };
 
+const nodeHint = (node) => {
+  const diagnosis = node.diagnosis || "";
+  const detail = node.last_error || node.diagnosis_hint || "";
+  if (!diagnosis && !detail) return "";
+  return [diagnosis, detail].filter(Boolean).join("：");
+};
+
+const statusBadgeClass = (node) => {
+  if (node.status === "online") return "badge";
+  if (node.status === "offline" || node.status === "error" || node.status === "timeout") return "badge badge-danger";
+  return "badge badge-muted";
+};
+
 const escapeHTML = (value) => String(value ?? "")
   .replaceAll("&", "&amp;")
   .replaceAll("<", "&lt;")
@@ -385,7 +398,7 @@ const getInboundConfig = (name) => (state.config?.inbounds || []).find((item) =>
 const getOutboundConfig = (name) => (state.config?.outbounds || []).find((item) => item.name === name);
 
 async function refresh() {
-  const [statusRes, nodeRes, configRes, kernelsRes, serviceRes, envRes, portsRes] = await Promise.all([
+  const [statusRes, nodeRes, configRes, kernelsRes, serviceRes, envRes, portsRes, securityRes] = await Promise.all([
     fetch("/api/status"),
     fetch("/api/nodes"),
     fetch("/api/config"),
@@ -393,8 +406,9 @@ async function refresh() {
     fetch("/api/system/service"),
     fetch("/api/system/environment"),
     fetch("/api/system/ports"),
+    fetch("/api/security/status"),
   ]);
-  if ([statusRes, nodeRes, configRes, kernelsRes, serviceRes, envRes, portsRes].some((res) => res.status === 401)) {
+  if ([statusRes, nodeRes, configRes, kernelsRes, serviceRes, envRes, portsRes, securityRes].some((res) => res.status === 401)) {
     location.href = "/login";
     return;
   }
@@ -407,12 +421,15 @@ async function refresh() {
   const service = await serviceRes.json();
   const environment = await envRes.json();
   const ports = await portsRes.json();
+  const security = await securityRes.json();
 
   renderMetrics();
   renderInbounds();
   renderOutbounds();
   renderSystem(kernels, service, environment, ports);
+  renderSecurity(security);
   renderOutboundOptions();
+  renderRoutingPreviewOptions();
 
   if (!state.configLoaded) {
     fillForm(document.getElementById("kernelForm"), state.config.kernel);
@@ -452,15 +469,16 @@ const renderInbounds = () => {
     return text.includes(query);
   });
   rows.innerHTML = items.map((node) => {
+    const hint = nodeHint(node);
     return `
       <tr>
-        <td>${escapeHTML(node.name)}</td>
+        <td><div class="node-name">${escapeHTML(node.name)}</div>${hint ? `<div class="node-hint">${escapeHTML(hint)}</div>` : ""}</td>
         <td>${escapeHTML(node.protocol)}</td>
         <td>${escapeHTML(node.address || "::")}:${node.port}</td>
         <td>${formatBytes(node.upload_bytes)}</td>
         <td>${formatBytes(node.download_bytes)}</td>
         <td>${formatLatency(node)}</td>
-        <td><span class="badge" title="${escapeHTML(node.last_error || "")}">${escapeHTML(node.status)}</span></td>
+        <td><span class="${statusBadgeClass(node)}" title="${escapeHTML(hint)}">${escapeHTML(node.status)}</span></td>
         <td>
           <div class="row-actions">
             <button class="icon-button" data-test-type="inbound" data-test-name="${escapeHTML(node.name)}" type="button">Google 测试</button>
@@ -484,20 +502,23 @@ const renderOutbounds = () => {
     const text = `${node.name} ${node.protocol} ${node.address}`.toLowerCase();
     return text.includes(query);
   });
-  rows.innerHTML = items.map((node) => `
+  rows.innerHTML = items.map((node) => {
+    const hint = nodeHint(node);
+    return `
     <tr>
-      <td>${escapeHTML(node.name)}</td>
+      <td><div class="node-name">${escapeHTML(node.name)}</div>${hint ? `<div class="node-hint">${escapeHTML(hint)}</div>` : ""}</td>
       <td>${escapeHTML(node.protocol)}</td>
       <td>${escapeHTML(node.address || "--")}</td>
       <td>${node.port || "--"}</td>
       <td>${formatBytes(node.upload_bytes)}</td>
       <td>${formatBytes(node.download_bytes)}</td>
       <td>${formatLatency(node)}</td>
-      <td><span class="badge" title="${escapeHTML(node.last_error || "")}">${escapeHTML(node.status)}</span></td>
+      <td><span class="${statusBadgeClass(node)}" title="${escapeHTML(hint)}">${escapeHTML(node.status)}</span></td>
       <td>
         <div class="row-actions">
           <button class="icon-button" data-test-type="outbound" data-test-name="${escapeHTML(node.name)}" type="button">连通测试</button>
           <button class="icon-button" data-edit-outbound="${escapeHTML(node.name)}" type="button">编辑</button>
+          <button class="icon-button" data-inspect-outbound="${escapeHTML(node.name)}" type="button">检查</button>
           <button class="icon-button" data-share-outbound="${escapeHTML(node.name)}" type="button">分享</button>
           <button class="icon-button" data-toggle-type="outbound" data-toggle-name="${escapeHTML(node.name)}" data-toggle-enabled="${node.enabled ? "false" : "true"}" type="button">${node.enabled ? "停用" : "启用"}</button>
           <button class="icon-button" data-delete-type="outbound" data-delete-name="${escapeHTML(node.name)}" type="button">删除</button>
@@ -505,7 +526,8 @@ const renderOutbounds = () => {
       </td>
       <td><input type="checkbox" data-node-check="outbound" value="${escapeHTML(node.name)}"${state.selected.outbound.has(node.name) ? " checked" : ""}></td>
     </tr>
-  `).join("") || `<tr><td colspan="10" class="empty-cell">还没有出站节点，可以导入链接或手动添加。</td></tr>`;
+  `;
+  }).join("") || `<tr><td colspan="10" class="empty-cell">还没有出站节点，可以导入链接或手动添加。</td></tr>`;
 };
 
 const refreshLogs = async () => {
@@ -532,6 +554,29 @@ const renderOutboundOptions = () => {
       .map((node) => `<option value="${escapeHTML(node.name)}">${escapeHTML(node.name)} / ${escapeHTML(node.protocol)}</option>`)
       .join("");
     defaultSelect.value = current;
+  }
+};
+
+const renderRoutingPreviewOptions = () => {
+  const inboundSelect = document.getElementById("routingPreviewInbound");
+  if (!inboundSelect) return;
+  const current = inboundSelect.value;
+  inboundSelect.innerHTML = getInbounds()
+    .map((node) => `<option value="${escapeHTML(node.name)}">${escapeHTML(node.name)} / ${escapeHTML(node.protocol)}</option>`)
+    .join("") || `<option value="">无入站</option>`;
+  if (current) inboundSelect.value = current;
+};
+
+const renderSecurity = (security) => {
+  setText("securityUser", security.username || "--");
+  setText("securityDefaultPassword", security.default_password ? "存在风险" : "未检测到");
+  setText("securitySessions", String(security.active_sessions ?? "--"));
+  setText("securityLoginLimit", `${security.login_failure_limit || 6} 次 / ${security.login_failure_window || "15 分钟"}`);
+  const warnings = document.getElementById("securityWarnings");
+  if (warnings) {
+    warnings.textContent = (security.warnings || []).length > 0
+      ? security.warnings.map((item) => `风险: ${item}`).join("\n")
+      : "未发现默认密码风险。仍建议定期更换强密码，并只在可信网络开放面板。";
   }
 };
 
@@ -879,10 +924,33 @@ const renderSubscriptionUpdateResult = (payload) => {
 
 const subscriptionResultLines = (payload) => (payload.results || []).flatMap((item) => [
   `订阅: ${item.provider || item.url}`,
-  `解析: ${item.parsed} / 导入: ${item.imported}`,
+  `解析: ${item.parsed} / 导入: ${item.imported} / 新增: ${item.added || 0} / 更新: ${item.updated || 0} / 未变化: ${item.unchanged || 0}`,
   `节点: ${(item.imported_nodes || []).slice(0, 20).join(", ") || "--"}`,
+  ...((item.warnings || []).slice(0, 10).map((warning) => `提示: ${warning}`)),
   ...((item.errors || []).map((error) => `错误: ${error}`)),
 ]);
+
+const importResultLines = (payload) => {
+  const lines = [
+    `解析节点: ${payload.parsed}`,
+    `导入节点: ${(payload.imported || []).length}`,
+    `新增: ${payload.added || 0} / 更新: ${payload.updated || 0} / 未变化: ${payload.unchanged || 0}`,
+  ];
+  const details = payload.details || [];
+  if (details.length > 0) {
+    lines.push("明细:");
+    lines.push(...details.slice(0, 30).map((item) => {
+      const preserved = item.preserved_name ? "，保留原名称" : "";
+      const warnings = (item.warnings || []).length ? `，提示: ${item.warnings.join("；")}` : "";
+      return `- ${item.action}: ${item.name} / ${item.protocol} / ${item.address}:${item.port}${preserved}${warnings}`;
+    }));
+  }
+  if ((payload.errors || []).length > 0) {
+    lines.push("部分错误:");
+    lines.push(...payload.errors.slice(0, 8));
+  }
+  return lines;
+};
 
 const showPage = (page) => {
   state.page = page;
@@ -1001,6 +1069,32 @@ const showShareLink = async (name, link) => {
   }
   openModal("shareModal");
   await navigator.clipboard?.writeText(link);
+};
+
+const inspectionLines = (inspection) => {
+  const lines = [
+    `节点: ${inspection.name}`,
+    `协议: ${inspection.protocol}`,
+  ];
+  if ((inspection.missing || []).length > 0) {
+    lines.push(`缺失字段: ${inspection.missing.join(", ")}`);
+  } else {
+    lines.push("缺失字段: 无");
+  }
+  if ((inspection.warnings || []).length > 0) {
+    lines.push(...inspection.warnings.map((warning) => `提示: ${warning}`));
+  }
+  lines.push("保存字段:");
+  Object.entries(inspection.saved || {}).forEach(([key, value]) => {
+    if (value) lines.push(`  ${key}: ${value}`);
+  });
+  if (inspection.raw) {
+    lines.push("原始链接解析字段:");
+    Object.entries(inspection.raw || {}).forEach(([key, value]) => {
+      if (value) lines.push(`  ${key}: ${value}`);
+    });
+  }
+  return lines;
 };
 
 const selectedBatchProtocols = (form) => [
@@ -1269,17 +1363,7 @@ document.getElementById("importOutboundsButton")?.addEventListener("click", asyn
   if (result) result.textContent = "解析中...";
   try {
     const payload = await postJSON("/api/outbounds/import", { text });
-    const names = (payload.imported || []).map((node) => `${node.name} (${node.protocol})`);
-    const lines = [
-      `解析节点: ${payload.parsed}`,
-      `导入节点: ${(payload.imported || []).length}`,
-      `名称: ${names.join(", ") || "--"}`,
-    ];
-    if ((payload.errors || []).length > 0) {
-      lines.push("部分错误:");
-      lines.push(...payload.errors.slice(0, 8));
-    }
-    if (result) result.textContent = lines.join("\n");
+    if (result) result.textContent = importResultLines(payload).join("\n");
     state.configLoaded = false;
     await refresh();
   } catch (error) {
@@ -1472,6 +1556,30 @@ document.getElementById("routingForm")?.addEventListener("submit", async (event)
   }
 });
 
+document.getElementById("previewRoutingButton")?.addEventListener("click", async () => {
+  const output = document.getElementById("routingPreviewOutput");
+  if (output) output.textContent = "预览中...";
+  try {
+    const payload = await postJSON("/api/routing/preview", {
+      inbound: document.getElementById("routingPreviewInbound")?.value || "",
+      target: document.getElementById("routingPreviewTarget")?.value || "",
+      protocol: document.getElementById("routingPreviewProtocol")?.value || "tcp",
+      port: Number(document.getElementById("routingPreviewPort")?.value || 443),
+    });
+    if (output) {
+      output.textContent = [
+        `模式: ${payload.mode}`,
+        `最终出站: ${payload.outbound}`,
+        `原因: ${payload.reason}`,
+        payload.matched_rule ? `命中规则: ${payload.matched_rule} / ${payload.match_type}=${payload.value} / 优先级 ${payload.priority}` : "",
+        ...((payload.warnings || []).map((warning) => `提示: ${warning}`)),
+      ].filter(Boolean).join("\n");
+    }
+  } catch (error) {
+    if (output) output.textContent = error.message;
+  }
+});
+
 document.getElementById("previewSubscriptionButton")?.addEventListener("click", async () => {
   const output = document.getElementById("subscriptionPreview");
   const url = document.getElementById("mihomoForm")?.elements.provider_url.value || "";
@@ -1519,6 +1627,21 @@ document.addEventListener("click", async (event) => {
     return;
   }
 
+  const inspectOutboundButton = event.target.closest("[data-inspect-outbound]");
+  if (inspectOutboundButton) {
+    const output = document.getElementById("outboundDiagnostics");
+    if (output) output.textContent = "检查中...";
+    try {
+      const response = await fetch(`/api/outbounds/${encodeURIComponent(inspectOutboundButton.dataset.inspectOutbound)}/inspect`);
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || "检查失败");
+      if (output) output.textContent = inspectionLines(payload).join("\n");
+    } catch (error) {
+      if (output) output.textContent = error.message;
+    }
+    return;
+  }
+
   const shareInboundButton = event.target.closest("[data-share-inbound]");
   if (shareInboundButton) {
     try {
@@ -1547,10 +1670,12 @@ document.addEventListener("click", async (event) => {
     try {
       testButton.textContent = "测试中";
       const result = await postJSON(`/api/nodes/${encodeURIComponent(testButton.dataset.testType)}/${encodeURIComponent(testButton.dataset.testName)}/test`, {});
-      if (result.error) testButton.textContent = "timeout";
+      testButton.textContent = result.status === "online" && result.latency_ms ? `${result.latency_ms} ms` : (result.diagnosis || "timeout");
+      testButton.title = [result.error, result.hint].filter(Boolean).join("\n");
       await refresh();
     } catch (error) {
       testButton.textContent = "timeout";
+      testButton.title = error.message;
       setTimeout(() => {
         testButton.textContent = originalText;
       }, 1200);

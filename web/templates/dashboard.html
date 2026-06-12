@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>NodeTools Agent</title>
-  <link rel="stylesheet" href="/static/css/style.css?v=20260612-18">
+  <link rel="stylesheet" href="/static/css/style.css?v=20260612-19">
 </head>
 <body>
   <div class="app-shell">
@@ -176,6 +176,7 @@
               <tbody id="outboundRows"></tbody>
             </table>
           </div>
+          <pre class="preview-box diagnostics-box" id="outboundDiagnostics">选择出站节点后点击“检查”，这里会显示导入字段、原始链接字段和缺失项。</pre>
         </section>
       </section>
 
@@ -341,6 +342,25 @@ sudo sh /opt/nodetools-agent/current/rollback-offline.sh</textarea></label>
             </label>
             </div>
             <p class="routing-hint" id="routingModeHint"></p>
+            <div class="routing-preview">
+              <label>测试入站
+                <select id="routingPreviewInbound"></select>
+              </label>
+              <label>目标域名/IP
+                <input id="routingPreviewTarget" value="www.google.com" placeholder="www.google.com 或 8.8.8.8">
+              </label>
+              <label>协议
+                <select id="routingPreviewProtocol">
+                  <option value="tcp">tcp</option>
+                  <option value="udp">udp</option>
+                </select>
+              </label>
+              <label>端口
+                <input id="routingPreviewPort" type="number" min="1" max="65535" value="443">
+              </label>
+              <button type="button" class="ghost-button" id="previewRoutingButton">预览命中</button>
+              <pre class="preview-box" id="routingPreviewOutput">输入目标后点击预览，查看最终会走 direct 还是某个出站节点。</pre>
+            </div>
             <div class="table-wrap" id="routingRulesPanel">
               <table>
                 <thead>
@@ -362,6 +382,16 @@ sudo sh /opt/nodetools-agent/current/rollback-offline.sh</textarea></label>
 
       <section class="page-view" data-page="security">
         <section class="settings-grid">
+          <section class="panel form-panel">
+            <h2>安全状态</h2>
+            <dl class="service-facts">
+              <div><dt>账号</dt><dd id="securityUser">--</dd></div>
+              <div><dt>默认密码</dt><dd id="securityDefaultPassword">--</dd></div>
+              <div><dt>活跃会话</dt><dd id="securitySessions">--</dd></div>
+              <div><dt>登录保护</dt><dd id="securityLoginLimit">--</dd></div>
+            </dl>
+            <pre class="preview-box" id="securityWarnings">加载中...</pre>
+          </section>
           <form class="panel form-panel" id="passwordForm">
             <h2>修改密码</h2>
             <label>用户名<input name="username" value="admin" autocomplete="username"></label>
@@ -502,6 +532,6 @@ sudo sh /opt/nodetools-agent/current/rollback-offline.sh</textarea></label>
     </section>
   </div>
 
-  <script src="/static/js/dashboard.js?v=20260612-18"></script>
+  <script src="/static/js/dashboard.js?v=20260612-19"></script>
 </body>
 </html>
