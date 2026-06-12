@@ -24,7 +24,15 @@ func TestSingBoxKernelGenerateConfig(t *testing.T) {
 			{Name: "ss", Protocol: "shadowsocks", Address: "127.0.0.1", Port: 2081, Method: "aes-128-gcm", Password: "secret"},
 			{Name: "socks-auth", Protocol: "socks5", Address: "127.0.0.1", Port: 2082, Username: "user", Password: "pass"},
 		},
-		Routing: RoutingConfig{DefaultOutbound: "ss", Rules: []RoutingRule{{Inbound: "local", Outbound: "remote"}}},
+		Routing: RoutingConfig{
+			Mode:            "rule",
+			DefaultOutbound: "ss",
+			Rules: []RoutingRule{
+				{MatchType: "inbound", Value: "local", Inbound: "local", Outbound: "remote", Priority: 10},
+				{MatchType: "domain_suffix", Value: "example.com", Outbound: "ss", Priority: 20},
+				{MatchType: "ip_cidr", Value: "10.0.0.0/8", Outbound: "direct", Priority: 30},
+			},
+		},
 	}
 
 	data, err := kernel.GenerateConfig(state)
@@ -101,6 +109,13 @@ func TestSingBoxKernelGenerateConfig(t *testing.T) {
 	if route["final"] != "ss" {
 		t.Fatalf("expected default outbound final ss, got %#v", route)
 	}
+	rules := route["rules"].([]any)
+	if len(rules) != 3 {
+		t.Fatalf("expected 3 sing-box route rules, got %#v", rules)
+	}
+	if rules[1].(map[string]any)["domain_suffix"] == nil || rules[2].(map[string]any)["ip_cidr"] == nil {
+		t.Fatalf("expected split route rules, got %#v", rules)
+	}
 }
 
 func TestMihomoKernelGenerateConfig(t *testing.T) {
@@ -133,6 +148,37 @@ func TestMihomoKernelGenerateConfig(t *testing.T) {
 	groups := cfg["proxy-groups"].([]any)
 	if groups[0].(map[string]any)["name"] != "Auto" {
 		t.Fatalf("expected Auto proxy group, got %#v", groups[0])
+	}
+}
+
+func TestMihomoKernelGenerateSplitRules(t *testing.T) {
+	kernel := NewMihomoKernel()
+	state := RuntimeState{
+		Inbounds:  []InboundConfig{{Name: "local", Protocol: "mixed", Port: 7890}},
+		Outbounds: []OutboundConfig{{Name: "remote", Protocol: "trojan", Address: "127.0.0.1", Port: 443, Password: "secret", TLS: true, ServerName: "example.com"}},
+		Routing: RoutingConfig{
+			Mode:            "rule",
+			DefaultOutbound: "remote",
+			Rules: []RoutingRule{
+				{MatchType: "inbound", Value: "local", Inbound: "local", Outbound: "remote", Priority: 10},
+				{MatchType: "domain_suffix", Value: "example.com", Outbound: "direct", Priority: 20},
+				{MatchType: "geoip", Value: "cn", Outbound: "direct", Priority: 30},
+			},
+		},
+	}
+
+	data, err := kernel.GenerateConfig(state)
+	if err != nil {
+		t.Fatalf("GenerateConfig returned error: %v", err)
+	}
+
+	var cfg map[string]any
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		t.Fatalf("generated mihomo config is not yaml: %v", err)
+	}
+	rules := cfg["rules"].([]any)
+	if rules[1] != "DOMAIN-SUFFIX,example.com,DIRECT" || rules[2] != "GEOIP,cn,DIRECT" || rules[len(rules)-1] != "MATCH,remote" {
+		t.Fatalf("expected mihomo split rules, got %#v", rules)
 	}
 }
 

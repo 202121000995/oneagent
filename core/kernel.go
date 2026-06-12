@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -298,15 +299,12 @@ func (k *SingBoxKernel) Name() string {
 }
 
 func (k *SingBoxKernel) GenerateConfig(state RuntimeState) ([]byte, error) {
-	final := state.Routing.DefaultOutbound
-	if final == "" {
-		final = "direct"
-	}
+	final := routeFinal(state.Routing)
 	payload := map[string]any{
 		"log":       map[string]any{"level": "info", "timestamp": true},
 		"inbounds":  singBoxInbounds(state.Inbounds),
 		"outbounds": singBoxOutbounds(state.Outbounds),
-		"route":     map[string]any{"rules": singBoxRules(state.Routing.Rules), "final": final},
+		"route":     map[string]any{"rules": singBoxRules(state.Routing), "final": final},
 	}
 	return json.MarshalIndent(payload, "", "  ")
 }
@@ -646,14 +644,41 @@ func singBoxOutbounds(outbounds []OutboundConfig) []map[string]any {
 	return items
 }
 
-func singBoxRules(rules []RoutingRule) []map[string]any {
-	rules = sortedRoutingRules(rules)
+func singBoxRules(routing RoutingConfig) []map[string]any {
+	if routingMode(routing.Mode) != "rule" {
+		return nil
+	}
+	rules := sortedRoutingRules(routing.Rules)
 	items := make([]map[string]any, 0, len(rules))
 	for _, rule := range rules {
 		if rule.Disabled {
 			continue
 		}
-		items = append(items, map[string]any{"inbound": []string{rule.Inbound}, "outbound": rule.Outbound})
+		item := map[string]any{"outbound": rule.Outbound}
+		value := routingRuleValue(rule)
+		switch routingRuleMatchType(rule) {
+		case "inbound":
+			item["inbound"] = splitCSV(value)
+		case "domain":
+			item["domain"] = splitCSV(value)
+		case "domain_suffix":
+			item["domain_suffix"] = splitCSV(value)
+		case "domain_keyword":
+			item["domain_keyword"] = splitCSV(value)
+		case "ip_cidr":
+			item["ip_cidr"] = splitCSV(value)
+		case "geoip":
+			item["geoip"] = splitCSV(value)
+		case "geosite":
+			item["geosite"] = splitCSV(value)
+		case "protocol":
+			item["protocol"] = splitCSV(value)
+		case "port":
+			item["port"] = splitInts(value)
+		default:
+			continue
+		}
+		items = append(items, item)
 	}
 	return items
 }
@@ -814,6 +839,18 @@ func splitCSV(value string) []string {
 	return out
 }
 
+func splitInts(value string) []int {
+	parts := splitCSV(value)
+	out := make([]int, 0, len(parts))
+	for _, part := range parts {
+		number, err := strconv.Atoi(part)
+		if err == nil && number > 0 && number <= 65535 {
+			out = append(out, number)
+		}
+	}
+	return out
+}
+
 func addSingBoxTransport(target map[string]any, outbound OutboundConfig) {
 	if outbound.Transport == "" || outbound.Transport == "tcp" {
 		return
@@ -931,13 +968,17 @@ func mihomoRules(routing RoutingConfig, cfg MihomoConfig, groups []map[string]an
 	if len(cfg.Rules) > 0 {
 		return cfg.Rules
 	}
-	target := "DIRECT"
-	if routing.DefaultOutbound != "" {
-		target = routing.DefaultOutbound
-	} else if len(groups) > 0 {
+	target := mihomoTargetName(routeFinal(routing))
+	if target == "DIRECT" && len(groups) > 0 && routingMode(routing.Mode) == "global" {
 		if name, ok := groups[0]["name"].(string); ok {
 			target = name
 		}
+	}
+	if routingMode(routing.Mode) == "direct" {
+		return []string{"MATCH,DIRECT"}
+	}
+	if routingMode(routing.Mode) == "global" {
+		return []string{"MATCH," + target}
 	}
 	rules := sortedRoutingRules(routing.Rules)
 	items := make([]string, 0, len(rules)+1)
@@ -949,12 +990,68 @@ func mihomoRules(routing RoutingConfig, cfg MihomoConfig, groups []map[string]an
 		if rule.Disabled {
 			continue
 		}
-		if port := inboundPorts[rule.Inbound]; port > 0 {
-			items = append(items, fmt.Sprintf("IN-PORT,%d,%s", port, rule.Outbound))
+		outbound := mihomoTargetName(rule.Outbound)
+		value := routingRuleValue(rule)
+		switch routingRuleMatchType(rule) {
+		case "inbound":
+			if port := inboundPorts[value]; port > 0 {
+				items = append(items, fmt.Sprintf("IN-PORT,%d,%s", port, outbound))
+			}
+		case "domain":
+			for _, item := range splitCSV(value) {
+				items = append(items, fmt.Sprintf("DOMAIN,%s,%s", item, outbound))
+			}
+		case "domain_suffix":
+			for _, item := range splitCSV(value) {
+				items = append(items, fmt.Sprintf("DOMAIN-SUFFIX,%s,%s", item, outbound))
+			}
+		case "domain_keyword":
+			for _, item := range splitCSV(value) {
+				items = append(items, fmt.Sprintf("DOMAIN-KEYWORD,%s,%s", item, outbound))
+			}
+		case "ip_cidr":
+			for _, item := range splitCSV(value) {
+				items = append(items, fmt.Sprintf("IP-CIDR,%s,%s,no-resolve", item, outbound))
+			}
+		case "geoip":
+			for _, item := range splitCSV(value) {
+				items = append(items, fmt.Sprintf("GEOIP,%s,%s", item, outbound))
+			}
+		case "geosite":
+			for _, item := range splitCSV(value) {
+				items = append(items, fmt.Sprintf("GEOSITE,%s,%s", item, outbound))
+			}
+		case "protocol":
+			for _, item := range splitCSV(value) {
+				items = append(items, fmt.Sprintf("NETWORK,%s,%s", strings.ToUpper(item), outbound))
+			}
+		case "port":
+			for _, item := range splitCSV(value) {
+				items = append(items, fmt.Sprintf("DST-PORT,%s,%s", item, outbound))
+			}
 		}
 	}
 	items = append(items, "MATCH,"+target)
 	return items
+}
+
+func routeFinal(routing RoutingConfig) string {
+	mode := routingMode(routing.Mode)
+	if mode == "direct" {
+		return "direct"
+	}
+	final := routing.DefaultOutbound
+	if final == "" {
+		final = "direct"
+	}
+	return final
+}
+
+func mihomoTargetName(name string) string {
+	if name == "" || name == "direct" {
+		return "DIRECT"
+	}
+	return name
 }
 
 func sortedRoutingRules(rules []RoutingRule) []RoutingRule {

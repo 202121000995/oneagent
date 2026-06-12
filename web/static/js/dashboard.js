@@ -50,6 +50,17 @@ const alpnOptions = ["", "h2", "http/1.1", "h2,http/1.1", "h3"];
 const transportOptions = ["tcp", "ws", "http", "grpc"];
 const inboundListenOptions = ["0.0.0.0", "::", "127.0.0.1"];
 const localListenOptions = ["0.0.0.0", "::", "127.0.0.1"];
+const routingMatchTypes = [
+  ["inbound", "入站"],
+  ["domain", "完整域名"],
+  ["domain_suffix", "域名后缀"],
+  ["domain_keyword", "域名关键词"],
+  ["ip_cidr", "IP/CIDR"],
+  ["geoip", "GeoIP"],
+  ["geosite", "Geosite"],
+  ["protocol", "协议"],
+  ["port", "目标端口"],
+];
 const tlsCertificateFields = [
   ["certificate_path", "TLS 证书路径", ""],
   ["key_path", "TLS 私钥路径", ""],
@@ -680,32 +691,117 @@ const fillRoutingForm = (routing) => {
   const form = document.getElementById("routingForm");
   if (!form) return;
   renderOutboundOptions();
+  form.elements.mode.value = routing.mode || "rule";
+  form.elements.preset.value = routing.preset || "custom";
   form.elements.default_outbound.value = routing.default_outbound || "direct";
-  form.elements.rules.value = (routing.rules || [])
-    .map((rule, index) => [
-      rule.priority || (index + 1) * 10,
-      rule.inbound || "",
-      rule.outbound || "",
-      rule.disabled ? "false" : "true",
-    ].join(","))
-    .join("\n");
+  renderRoutingRules(routing.rules || []);
 };
 
-const parseRoutingRules = (text) => String(text || "")
-  .split(/\r?\n/)
-  .map((line) => line.trim())
-  .filter(Boolean)
-  .map((line, index) => {
-    const parts = line.split(",").map((item) => item.trim());
-    const [priority, inbound, outbound, enabled = "true"] = parts;
-    return {
-      name: `${inbound || "rule"}-route`,
-      priority: Number(priority || (index + 1) * 10),
-      inbound,
+const routingValuePlaceholder = (matchType) => ({
+  inbound: "选择入站",
+  domain: "example.com",
+  domain_suffix: "google.com",
+  domain_keyword: "google",
+  ip_cidr: "8.8.8.0/24",
+  geoip: "cn",
+  geosite: "cn",
+  protocol: "tcp 或 udp",
+  port: "443",
+}[matchType] || "");
+
+const routingRuleValue = (rule) => rule.value || rule.inbound || "";
+
+const routingRuleMatchType = (rule) => rule.match_type || (rule.inbound ? "inbound" : "domain_suffix");
+
+const routingOutboundOptionsHTML = (current = "") => [
+  `<option value="direct"${current === "direct" ? " selected" : ""}>direct</option>`,
+  ...getOutbounds().map((node) => `<option value="${escapeHTML(node.name)}"${node.name === current ? " selected" : ""}>${escapeHTML(node.name)} / ${escapeHTML(node.protocol)}</option>`),
+].join("");
+
+const routingInboundOptionsHTML = (current = "") => getInbounds()
+  .map((node) => `<option value="${escapeHTML(node.name)}"${node.name === current ? " selected" : ""}>${escapeHTML(node.name)} / ${escapeHTML(node.protocol)}</option>`)
+  .join("");
+
+const routingValueControl = (matchType, value) => {
+  if (matchType === "inbound") {
+    const options = routingInboundOptionsHTML(value);
+    return `<select name="value">${options || `<option value="">请先添加入站</option>`}</select>`;
+  }
+  return `<input name="value" value="${escapeHTML(value)}" placeholder="${escapeHTML(routingValuePlaceholder(matchType))}">`;
+};
+
+const renderRoutingRules = (rules = []) => {
+  const rows = document.getElementById("routingRuleRows");
+  if (!rows) return;
+  rows.innerHTML = rules.map((rule, index) => {
+    const matchType = routingRuleMatchType(rule);
+    const value = routingRuleValue(rule);
+    const priority = rule.priority || (index + 1) * 10;
+    return `
+      <tr data-routing-rule>
+        <td><input name="priority" type="number" min="1" value="${priority}"></td>
+        <td>
+          <select name="match_type">
+            ${routingMatchTypes.map(([key, label]) => `<option value="${key}"${key === matchType ? " selected" : ""}>${label}</option>`).join("")}
+          </select>
+        </td>
+        <td data-routing-value>${routingValueControl(matchType, value)}</td>
+        <td><select name="outbound">${routingOutboundOptionsHTML(rule.outbound || "direct")}</select></td>
+        <td>
+          <select name="enabled">
+            <option value="true"${rule.disabled ? "" : " selected"}>启用</option>
+            <option value="false"${rule.disabled ? " selected" : ""}>停用</option>
+          </select>
+        </td>
+        <td><button type="button" class="icon-button" data-delete-routing-rule>删除</button></td>
+      </tr>
+    `;
+  }).join("") || `<tr><td colspan="6" class="empty-cell">还没有分流规则；未命中流量会走默认出站。</td></tr>`;
+};
+
+const collectRoutingRules = () => Array.from(document.querySelectorAll("[data-routing-rule]"))
+  .map((row, index) => {
+    const matchType = row.querySelector('[name="match_type"]')?.value || "domain_suffix";
+    const value = row.querySelector('[name="value"]')?.value || "";
+    const outbound = row.querySelector('[name="outbound"]')?.value || "direct";
+    const priority = Number(row.querySelector('[name="priority"]')?.value || (index + 1) * 10);
+    const rule = {
+      name: `${matchType}-${index + 1}`,
+      match_type: matchType,
+      value,
       outbound,
-      disabled: ["false", "0", "no", "停用"].includes(enabled.toLowerCase()),
+      priority,
+      disabled: row.querySelector('[name="enabled"]')?.value === "false",
     };
+    if (matchType === "inbound") rule.inbound = value;
+    return rule;
+  })
+  .filter((rule) => rule.value && rule.outbound);
+
+const addRoutingRule = (rule = {}) => {
+  const current = collectRoutingRules();
+  current.push({
+    match_type: rule.match_type || "domain_suffix",
+    value: rule.value || "",
+    inbound: rule.inbound || "",
+    outbound: rule.outbound || document.getElementById("defaultOutboundSelect")?.value || "direct",
+    priority: rule.priority || (current.length + 1) * 10,
+    disabled: Boolean(rule.disabled),
   });
+  renderRoutingRules(current);
+};
+
+const applyBypassChinaPreset = () => {
+  const defaultOutbound = document.getElementById("defaultOutboundSelect")?.value || "direct";
+  document.getElementById("routingModeSelect").value = "rule";
+  document.getElementById("routingPresetSelect").value = "bypass_cn";
+  renderRoutingRules([
+    { match_type: "ip_cidr", value: "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,127.0.0.0/8,100.64.0.0/10", outbound: "direct", priority: 10 },
+    { match_type: "geosite", value: "cn", outbound: "direct", priority: 20 },
+    { match_type: "geoip", value: "cn", outbound: "direct", priority: 30 },
+    { match_type: "domain_suffix", value: "openai.com,google.com,youtube.com,github.com", outbound: defaultOutbound, priority: 40 },
+  ]);
+};
 
 const mihomoPayloadFromForm = (form) => {
   const data = formToObject(form);
@@ -1000,6 +1096,24 @@ document.getElementById("inboundDynamicFields")?.addEventListener("change", (eve
   if (["security", "tls", "transport"].includes(event.target.name)) renderInboundFields();
 });
 document.getElementById("outboundProtocolSelect")?.addEventListener("change", renderOutboundFields);
+document.getElementById("addRoutingRuleButton")?.addEventListener("click", () => addRoutingRule());
+document.getElementById("bypassChinaPresetButton")?.addEventListener("click", applyBypassChinaPreset);
+document.getElementById("routingPresetSelect")?.addEventListener("change", (event) => {
+  if (event.target.value === "bypass_cn") applyBypassChinaPreset();
+});
+document.getElementById("routingRuleRows")?.addEventListener("change", (event) => {
+  const matchSelect = event.target.closest('[name="match_type"]');
+  if (!matchSelect) return;
+  const row = matchSelect.closest("[data-routing-rule]");
+  const cell = row?.querySelector("[data-routing-value]");
+  if (cell) cell.innerHTML = routingValueControl(matchSelect.value, "");
+});
+document.getElementById("routingRuleRows")?.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-delete-routing-rule]");
+  if (!button) return;
+  button.closest("[data-routing-rule]")?.remove();
+  if (!document.querySelector("[data-routing-rule]")) renderRoutingRules([]);
+});
 renderInboundFields();
 renderOutboundFields();
 
@@ -1317,8 +1431,10 @@ document.getElementById("routingForm")?.addEventListener("submit", async (event)
   event.preventDefault();
   const data = formToObject(event.currentTarget);
   const payload = {
+    mode: data.mode || "rule",
+    preset: data.preset || "custom",
     default_outbound: data.default_outbound || "direct",
-    rules: parseRoutingRules(data.rules),
+    rules: collectRoutingRules(),
   };
   try {
     await sendJSON("/api/routing/config", "PUT", payload);

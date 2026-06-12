@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>NodeTools Agent</title>
-  <link rel="stylesheet" href="/static/css/style.css?v=20260612-11">
+  <link rel="stylesheet" href="/static/css/style.css?v=20260612-12">
 </head>
 <body>
   <div class="app-shell">
@@ -313,18 +313,54 @@ sudo sh /opt/nodetools-agent/current/rollback-offline.sh</textarea></label>
       </section>
 
       <section class="page-view" data-page="routing">
-        <section class="settings-grid">
-          <form class="panel form-panel" id="routingForm">
-            <h2>路由设置</h2>
+        <section class="panel">
+          <form id="routingForm">
+            <div class="panel-header">
+              <div>
+                <h2>路由与分流</h2>
+                <span>规则按优先级从小到大匹配；未命中时走默认出站</span>
+              </div>
+              <div class="panel-actions">
+                <button type="button" class="ghost-button" id="addRoutingRuleButton">添加规则</button>
+                <button type="button" class="ghost-button" id="bypassChinaPresetButton">绕过大陆</button>
+                <button type="submit">保存分流</button>
+              </div>
+            </div>
+            <div class="routing-controls">
+              <label>模式
+                <select name="mode" id="routingModeSelect">
+                  <option value="rule">规则分流</option>
+                  <option value="global">全局代理</option>
+                  <option value="direct">全部直连</option>
+                </select>
+              </label>
             <label>默认出站
               <select name="default_outbound" id="defaultOutboundSelect">
                 <option value="direct">direct</option>
               </select>
             </label>
-            <label>规则
-              <textarea name="rules" rows="8" placeholder="每行：优先级,入站名称,出站名称,启用&#10;10,Local-Mixed,HK,true"></textarea>
-            </label>
-            <button type="submit">保存路由</button>
+              <label>预设
+                <select name="preset" id="routingPresetSelect">
+                  <option value="custom">自定义</option>
+                  <option value="bypass_cn">绕过大陆</option>
+                </select>
+              </label>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>优先级</th>
+                    <th>匹配</th>
+                    <th>值</th>
+                    <th>出站</th>
+                    <th>启用</th>
+                    <th>操作</th>
+                  </tr>
+                </thead>
+                <tbody id="routingRuleRows"></tbody>
+              </table>
+            </div>
           </form>
         </section>
       </section>
@@ -477,6 +513,6 @@ sudo sh /opt/nodetools-agent/current/rollback-offline.sh</textarea></label>
     </section>
   </div>
 
-  <script src="/static/js/dashboard.js?v=20260612-11"></script>
+  <script src="/static/js/dashboard.js?v=20260612-12"></script>
 </body>
 </html>

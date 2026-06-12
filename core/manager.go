@@ -1190,7 +1190,7 @@ func deleteOutboundConfig(items []OutboundConfig, name string) []OutboundConfig 
 func deleteRulesForNode(items []RoutingRule, nodeType, name string) []RoutingRule {
 	next := items[:0]
 	for _, item := range items {
-		if nodeType == "inbound" && item.Inbound == name {
+		if nodeType == "inbound" && routingRuleMatchType(item) == "inbound" && routingRuleValue(item) == name {
 			continue
 		}
 		if nodeType == "outbound" && item.Outbound == name {

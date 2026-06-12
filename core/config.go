@@ -94,14 +94,18 @@ type OutboundConfig struct {
 }
 
 type RoutingRule struct {
-	Name     string `yaml:"name,omitempty" json:"name,omitempty"`
-	Inbound  string `yaml:"inbound" json:"inbound"`
-	Outbound string `yaml:"outbound" json:"outbound"`
-	Priority int    `yaml:"priority,omitempty" json:"priority,omitempty"`
-	Disabled bool   `yaml:"disabled,omitempty" json:"disabled,omitempty"`
+	Name      string `yaml:"name,omitempty" json:"name,omitempty"`
+	MatchType string `yaml:"match_type,omitempty" json:"match_type,omitempty"`
+	Value     string `yaml:"value,omitempty" json:"value,omitempty"`
+	Inbound   string `yaml:"inbound,omitempty" json:"inbound,omitempty"`
+	Outbound  string `yaml:"outbound" json:"outbound"`
+	Priority  int    `yaml:"priority,omitempty" json:"priority,omitempty"`
+	Disabled  bool   `yaml:"disabled,omitempty" json:"disabled,omitempty"`
 }
 
 type RoutingConfig struct {
+	Mode            string        `yaml:"mode,omitempty" json:"mode,omitempty"`
+	Preset          string        `yaml:"preset,omitempty" json:"preset,omitempty"`
 	DefaultOutbound string        `yaml:"default_outbound,omitempty" json:"default_outbound,omitempty"`
 	Rules           []RoutingRule `yaml:"rules" json:"rules"`
 }
@@ -209,23 +213,38 @@ func (c Config) Validate() error {
 		seenOutbound[outbound.Name] = struct{}{}
 	}
 
-	if c.Routing.DefaultOutbound != "" {
-		if c.Routing.DefaultOutbound != "direct" {
-			if _, ok := seenOutbound[c.Routing.DefaultOutbound]; !ok {
-				return fmt.Errorf("routing default_outbound references missing outbound %q", c.Routing.DefaultOutbound)
-			}
+	mode := routingMode(c.Routing.Mode)
+	if mode == "" {
+		return fmt.Errorf("routing mode %q is not supported", c.Routing.Mode)
+	}
+	if c.Routing.DefaultOutbound != "" && c.Routing.DefaultOutbound != "direct" {
+		if _, ok := seenOutbound[c.Routing.DefaultOutbound]; !ok {
+			return fmt.Errorf("routing default_outbound references missing outbound %q", c.Routing.DefaultOutbound)
 		}
 	}
-	for _, rule := range c.Routing.Rules {
-		if rule.Disabled {
-			continue
-		}
-		if _, ok := seenInbound[rule.Inbound]; !ok {
-			return fmt.Errorf("routing rule references missing inbound %q", rule.Inbound)
-		}
-		if rule.Outbound != "direct" {
-			if _, ok := seenOutbound[rule.Outbound]; !ok {
-				return fmt.Errorf("routing rule references missing outbound %q", rule.Outbound)
+	if mode == "rule" {
+		for _, rule := range c.Routing.Rules {
+			if rule.Disabled {
+				continue
+			}
+			matchType := routingRuleMatchType(rule)
+			if !isSupportedRoutingMatchType(matchType) {
+				return fmt.Errorf("routing rule %q uses unsupported match type %q", rule.Name, matchType)
+			}
+			if matchType == "inbound" {
+				if _, ok := seenInbound[routingRuleValue(rule)]; !ok {
+					return fmt.Errorf("routing rule references missing inbound %q", routingRuleValue(rule))
+				}
+			} else if routingRuleValue(rule) == "" {
+				return fmt.Errorf("routing rule %q requires match value", rule.Name)
+			}
+			if rule.Outbound == "" {
+				return fmt.Errorf("routing rule %q requires outbound", rule.Name)
+			}
+			if rule.Outbound != "direct" {
+				if _, ok := seenOutbound[rule.Outbound]; !ok {
+					return fmt.Errorf("routing rule references missing outbound %q", rule.Outbound)
+				}
 			}
 		}
 	}
@@ -344,6 +363,46 @@ func isSupportedInboundProtocol(protocol string) bool {
 func isSupportedOutboundProtocol(protocol string) bool {
 	switch protocol {
 	case "direct", "socks", "socks5", "http", "vless", "vmess", "trojan", "shadowsocks", "ss", "hysteria2", "tuic", "anytls", "naive", "shadowtls", "tcp", "udp":
+		return true
+	default:
+		return false
+	}
+}
+
+func routingMode(mode string) string {
+	switch mode {
+	case "", "rule":
+		return "rule"
+	case "global", "direct":
+		return mode
+	default:
+		return ""
+	}
+}
+
+func routingRuleMatchType(rule RoutingRule) string {
+	if rule.MatchType != "" {
+		return rule.MatchType
+	}
+	if rule.Inbound != "" {
+		return "inbound"
+	}
+	return "domain_suffix"
+}
+
+func routingRuleValue(rule RoutingRule) string {
+	if rule.Value != "" {
+		return rule.Value
+	}
+	if routingRuleMatchType(rule) == "inbound" {
+		return rule.Inbound
+	}
+	return ""
+}
+
+func isSupportedRoutingMatchType(matchType string) bool {
+	switch matchType {
+	case "inbound", "domain", "domain_suffix", "domain_keyword", "ip_cidr", "geoip", "geosite", "protocol", "port":
 		return true
 	default:
 		return false
