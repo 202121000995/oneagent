@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>NodeTools Agent</title>
-  <link rel="stylesheet" href="/static/css/style.css?v=20260612-12">
+  <link rel="stylesheet" href="/static/css/style.css?v=20260612-14">
 </head>
 <body>
   <div class="app-shell">
@@ -322,10 +322,11 @@ sudo sh /opt/nodetools-agent/current/rollback-offline.sh</textarea></label>
               </div>
               <div class="panel-actions">
                 <button type="button" class="ghost-button" id="addRoutingRuleButton">添加规则</button>
-                <button type="button" class="ghost-button" id="bypassChinaPresetButton">绕过大陆</button>
+                <button type="button" class="ghost-button" id="bypassChinaPresetButton">生成绕过大陆规则</button>
                 <button type="submit">保存分流</button>
               </div>
             </div>
+            <input type="hidden" name="preset" id="routingPresetInput" value="custom">
             <div class="routing-controls">
               <label>模式
                 <select name="mode" id="routingModeSelect">
@@ -339,14 +340,9 @@ sudo sh /opt/nodetools-agent/current/rollback-offline.sh</textarea></label>
                 <option value="direct">direct</option>
               </select>
             </label>
-              <label>预设
-                <select name="preset" id="routingPresetSelect">
-                  <option value="custom">自定义</option>
-                  <option value="bypass_cn">绕过大陆</option>
-                </select>
-              </label>
             </div>
-            <div class="table-wrap">
+            <p class="routing-hint" id="routingModeHint"></p>
+            <div class="table-wrap" id="routingRulesPanel">
               <table>
                 <thead>
                   <tr>
@@ -513,6 +509,6 @@ sudo sh /opt/nodetools-agent/current/rollback-offline.sh</textarea></label>
     </section>
   </div>
 
-  <script src="/static/js/dashboard.js?v=20260612-12"></script>
+  <script src="/static/js/dashboard.js?v=20260612-14"></script>
 </body>
 </html>

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -155,6 +156,7 @@ func LoadConfig(path string) (Config, error) {
 	if cfg.Kernel.ConfigPath == "" {
 		cfg.Kernel.ConfigPath = "kernel.generated.json"
 	}
+	cfg.Routing = normalizeRoutingConfig(cfg.Routing)
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err
 	}
@@ -407,6 +409,33 @@ func isSupportedRoutingMatchType(matchType string) bool {
 	default:
 		return false
 	}
+}
+
+func normalizeRoutingConfig(routing RoutingConfig) RoutingConfig {
+	if routing.Mode == "" {
+		routing.Mode = "rule"
+	}
+	if routing.Preset == "bypass_cn" {
+		rules := routing.Rules[:0]
+		for _, rule := range routing.Rules {
+			if isLegacyBypassOverseasDirectRule(rule) {
+				continue
+			}
+			rules = append(rules, rule)
+		}
+		routing.Rules = rules
+	}
+	return routing
+}
+
+func isLegacyBypassOverseasDirectRule(rule RoutingRule) bool {
+	if rule.Outbound != "direct" || routingRuleMatchType(rule) != "domain_suffix" {
+		return false
+	}
+	value := strings.ToLower(routingRuleValue(rule))
+	return strings.Contains(value, "google.com") &&
+		strings.Contains(value, "youtube.com") &&
+		strings.Contains(value, "github.com")
 }
 
 func isSupportedSSMethod(method string) bool {

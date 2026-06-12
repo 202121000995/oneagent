@@ -353,10 +353,23 @@ th {
 
 .routing-controls {
   display: grid;
-  grid-template-columns: repeat(3, minmax(180px, 1fr));
+  grid-template-columns: repeat(2, minmax(180px, 1fr));
   gap: 14px;
   padding: 18px;
   border-top: 1px solid var(--line);
+}
+
+.routing-hint {
+  margin: 0;
+  padding: 0 18px 18px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.routing-disabled {
+  opacity: 0.48;
+  pointer-events: none;
 }
 
 #routingRuleRows input,

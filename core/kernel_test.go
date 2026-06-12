@@ -182,6 +182,20 @@ func TestMihomoKernelGenerateSplitRules(t *testing.T) {
 	}
 }
 
+func TestNormalizeRoutingConfigRemovesLegacyBypassOverseasDirectRule(t *testing.T) {
+	routing := normalizeRoutingConfig(RoutingConfig{
+		Mode:   "rule",
+		Preset: "bypass_cn",
+		Rules: []RoutingRule{
+			{MatchType: "geosite", Value: "cn", Outbound: "direct", Priority: 20},
+			{MatchType: "domain_suffix", Value: "openai.com,google.com,youtube.com,github.com", Outbound: "direct", Priority: 40},
+		},
+	})
+	if len(routing.Rules) != 1 || routing.Rules[0].MatchType != "geosite" {
+		t.Fatalf("expected legacy overseas direct rule removed, got %#v", routing.Rules)
+	}
+}
+
 func TestNormalizeKernelConfigSwitchesDefaults(t *testing.T) {
 	cfg := normalizeKernelConfig(KernelConfig{
 		Type:       "mihomo",

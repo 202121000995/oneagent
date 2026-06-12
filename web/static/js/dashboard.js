@@ -695,6 +695,7 @@ const fillRoutingForm = (routing) => {
   form.elements.preset.value = routing.preset || "custom";
   form.elements.default_outbound.value = routing.default_outbound || "direct";
   renderRoutingRules(routing.rules || []);
+  updateRoutingModeUI();
 };
 
 const routingValuePlaceholder = (matchType) => ({
@@ -779,6 +780,8 @@ const collectRoutingRules = () => Array.from(document.querySelectorAll("[data-ro
   .filter((rule) => rule.value && rule.outbound);
 
 const addRoutingRule = (rule = {}) => {
+  const preset = document.getElementById("routingPresetInput");
+  if (preset) preset.value = "custom";
   const current = collectRoutingRules();
   current.push({
     match_type: rule.match_type || "domain_suffix",
@@ -792,15 +795,46 @@ const addRoutingRule = (rule = {}) => {
 };
 
 const applyBypassChinaPreset = () => {
-  const defaultOutbound = document.getElementById("defaultOutboundSelect")?.value || "direct";
+  const defaultSelect = document.getElementById("defaultOutboundSelect");
+  if (defaultSelect?.value === "direct") {
+    const firstOutbound = getOutbounds()[0]?.name;
+    if (firstOutbound) defaultSelect.value = firstOutbound;
+  }
   document.getElementById("routingModeSelect").value = "rule";
-  document.getElementById("routingPresetSelect").value = "bypass_cn";
+  document.getElementById("routingPresetInput").value = "bypass_cn";
   renderRoutingRules([
     { match_type: "ip_cidr", value: "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,127.0.0.0/8,100.64.0.0/10", outbound: "direct", priority: 10 },
     { match_type: "geosite", value: "cn", outbound: "direct", priority: 20 },
     { match_type: "geoip", value: "cn", outbound: "direct", priority: 30 },
-    { match_type: "domain_suffix", value: "openai.com,google.com,youtube.com,github.com", outbound: defaultOutbound, priority: 40 },
   ]);
+  updateRoutingModeUI();
+};
+
+const updateRoutingModeUI = () => {
+  const mode = document.getElementById("routingModeSelect")?.value || "rule";
+  const defaultSelect = document.getElementById("defaultOutboundSelect");
+  const rulesPanel = document.getElementById("routingRulesPanel");
+  const addButton = document.getElementById("addRoutingRuleButton");
+  const presetButton = document.getElementById("bypassChinaPresetButton");
+  const hint = document.getElementById("routingModeHint");
+
+  const ruleMode = mode === "rule";
+  const globalMode = mode === "global";
+  if (defaultSelect) {
+    defaultSelect.disabled = mode === "direct";
+    defaultSelect.closest("label")?.classList.toggle("routing-disabled", mode === "direct");
+  }
+  if (rulesPanel) rulesPanel.hidden = !ruleMode;
+  if (addButton) addButton.hidden = !ruleMode;
+  if (presetButton) presetButton.hidden = !ruleMode;
+  if (hint) {
+    hint.textContent = {
+      direct: "全部直连：所有流量直接从 VPS 出口访问，不使用默认出站，分流规则不会生效。",
+      global: "全局代理：所有流量都走默认出站，下面的分流规则不会生效。",
+      rule: "规则分流：先按下方规则匹配，未命中流量走默认出站。绕过大陆规则只让国内和内网直连，国外默认走节点。",
+    }[mode] || "";
+  }
+  if (globalMode) document.getElementById("routingPresetInput").value = "custom";
 };
 
 const mihomoPayloadFromForm = (form) => {
@@ -1096,12 +1130,12 @@ document.getElementById("inboundDynamicFields")?.addEventListener("change", (eve
   if (["security", "tls", "transport"].includes(event.target.name)) renderInboundFields();
 });
 document.getElementById("outboundProtocolSelect")?.addEventListener("change", renderOutboundFields);
+document.getElementById("routingModeSelect")?.addEventListener("change", updateRoutingModeUI);
 document.getElementById("addRoutingRuleButton")?.addEventListener("click", () => addRoutingRule());
 document.getElementById("bypassChinaPresetButton")?.addEventListener("click", applyBypassChinaPreset);
-document.getElementById("routingPresetSelect")?.addEventListener("change", (event) => {
-  if (event.target.value === "bypass_cn") applyBypassChinaPreset();
-});
 document.getElementById("routingRuleRows")?.addEventListener("change", (event) => {
+  const preset = document.getElementById("routingPresetInput");
+  if (preset) preset.value = "custom";
   const matchSelect = event.target.closest('[name="match_type"]');
   if (!matchSelect) return;
   const row = matchSelect.closest("[data-routing-rule]");
@@ -1111,6 +1145,8 @@ document.getElementById("routingRuleRows")?.addEventListener("change", (event) =
 document.getElementById("routingRuleRows")?.addEventListener("click", (event) => {
   const button = event.target.closest("[data-delete-routing-rule]");
   if (!button) return;
+  const preset = document.getElementById("routingPresetInput");
+  if (preset) preset.value = "custom";
   button.closest("[data-routing-rule]")?.remove();
   if (!document.querySelector("[data-routing-rule]")) renderRoutingRules([]);
 });
