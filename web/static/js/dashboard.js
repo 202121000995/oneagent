@@ -433,20 +433,20 @@ const renderInbounds = () => {
     return text.includes(query);
   });
   rows.innerHTML = items.map((node) => {
-    const rule = rules.find((item) => item.inbound === node.name);
+    const rule = rules.find((item) => routingRuleMatchesInbound(item, node.name));
     return `
       <tr>
         <td>${escapeHTML(node.name)}</td>
         <td>${escapeHTML(node.protocol)}</td>
         <td>${escapeHTML(node.address || "::")}:${node.port}</td>
-        <td>${escapeHTML(rule?.outbound || "未选择")}</td>
+        <td>${escapeHTML(rule?.outbound || state.config?.routing?.default_outbound || "direct")}</td>
         <td>${formatBytes(node.upload_bytes)}</td>
         <td>${formatBytes(node.download_bytes)}</td>
         <td>${node.latency_ms ? `${node.latency_ms} ms` : "--"}</td>
         <td><span class="badge" title="${escapeHTML(node.last_error || "")}">${escapeHTML(node.status)}</span></td>
         <td>
           <div class="row-actions">
-            <button class="icon-button" data-test-type="inbound" data-test-name="${escapeHTML(node.name)}" type="button">连通测试</button>
+            <button class="icon-button" data-test-type="inbound" data-test-name="${escapeHTML(node.name)}" type="button">Google 测试</button>
             <button class="icon-button" data-edit-inbound="${escapeHTML(node.name)}" type="button">编辑</button>
             <button class="icon-button" data-share-inbound="${escapeHTML(node.name)}" type="button">分享</button>
             <button class="icon-button" data-toggle-type="inbound" data-toggle-name="${escapeHTML(node.name)}" data-toggle-enabled="${node.enabled ? "false" : "true"}" type="button">${node.enabled ? "停用" : "启用"}</button>
@@ -507,15 +507,7 @@ const refreshLogs = async () => {
 };
 
 const renderOutboundOptions = () => {
-  const select = document.getElementById("inboundOutboundSelect");
   const outbounds = getOutbounds();
-  if (select) {
-    const current = select.value;
-    select.innerHTML = outbounds.length
-      ? outbounds.map((node) => `<option value="${escapeHTML(node.name)}">${escapeHTML(node.name)} / ${escapeHTML(node.protocol)}</option>`).join("")
-      : `<option value="">请先添加出站节点</option>`;
-    if (current && outbounds.some((node) => node.name === current)) select.value = current;
-  }
   const defaultSelect = document.getElementById("defaultOutboundSelect");
   if (defaultSelect) {
     const current = defaultSelect.value || state.config?.routing?.default_outbound || "direct";
@@ -523,14 +515,6 @@ const renderOutboundOptions = () => {
       .map((node) => `<option value="${escapeHTML(node.name)}">${escapeHTML(node.name)} / ${escapeHTML(node.protocol)}</option>`)
       .join("");
     defaultSelect.value = current;
-  }
-  const batchSelect = document.getElementById("batchInboundOutboundSelect");
-  if (batchSelect) {
-    const current = batchSelect.value;
-    batchSelect.innerHTML = outbounds.length
-      ? outbounds.map((node) => `<option value="${escapeHTML(node.name)}">${escapeHTML(node.name)} / ${escapeHTML(node.protocol)}</option>`).join("")
-      : `<option value="">请先添加出站节点</option>`;
-    if (current && outbounds.some((node) => node.name === current)) batchSelect.value = current;
   }
 };
 
@@ -713,6 +697,9 @@ const routingValuePlaceholder = (matchType) => ({
 const routingRuleValue = (rule) => rule.value || rule.inbound || "";
 
 const routingRuleMatchType = (rule) => rule.match_type || (rule.inbound ? "inbound" : "domain_suffix");
+
+const routingRuleMatchesInbound = (rule, inboundName) =>
+  routingRuleMatchType(rule) === "inbound" && routingRuleValue(rule) === inboundName && !rule.disabled;
 
 const routingOutboundOptionsHTML = (current = "") => [
   `<option value="direct"${current === "direct" ? " selected" : ""}>direct</option>`,
@@ -904,7 +891,6 @@ const openModal = (id) => {
   });
   document.body.classList.add("modal-open");
   if (id === "inboundModal") {
-    renderOutboundOptions();
     renderInboundFields();
   }
   if (id === "outboundModal") renderOutboundFields();
@@ -920,9 +906,6 @@ const openInboundEditor = (name) => {
   document.getElementById("inboundProtocolSelect").value = inbound.protocol;
   renderInboundFields();
   fillForm(form, inbound);
-  const rule = getRules().find((item) => item.inbound === inbound.name);
-  renderOutboundOptions();
-  if (rule?.outbound) form.elements.outbound.value = rule.outbound;
   openModal("inboundModal");
 };
 
@@ -1020,7 +1003,6 @@ const buildBatchInboundPayload = async (protocol, base) => {
     name,
     listen: base.listen,
     port: base.port,
-    outbound: base.outbound,
   };
   switch (protocol) {
   case "vless-reality": {
@@ -1099,13 +1081,11 @@ document.getElementById("openInboundModalButton")?.addEventListener("click", () 
   form?.reset();
   if (form?.elements.original_name) form.elements.original_name.value = "";
   renderInboundFields();
-  renderOutboundOptions();
   openModal("inboundModal");
 });
 document.getElementById("openBatchInboundModalButton")?.addEventListener("click", () => {
   const form = document.getElementById("batchInboundForm");
   form?.reset();
-  renderOutboundOptions();
   const result = document.getElementById("batchInboundResult");
   if (result) result.textContent = "";
   openModal("batchInboundModal");
@@ -1336,10 +1316,7 @@ document.getElementById("inboundForm")?.addEventListener("submit", async (event)
   const editing = Boolean(data.original_name);
   delete data.original_name;
   delete data.share_host;
-  if (!data.outbound) {
-    alert("请先添加一个出站节点，再创建入站。");
-    return;
-  }
+  delete data.outbound;
   try {
     if (editing) {
       await sendJSON("/api/inbounds", "PUT", data);
@@ -1364,15 +1341,10 @@ document.getElementById("batchInboundForm")?.addEventListener("submit", async (e
     return;
   }
   const data = formToObject(form);
-  if (!data.outbound) {
-    if (output) output.textContent = "请先添加一个出站节点，再批量搭建入站。";
-    return;
-  }
   const base = {
     prefix: data.prefix || "NodeTools",
     listen: data.listen || "0.0.0.0",
     port: Number(data.start_port || 30000),
-    outbound: data.outbound,
     realityServer: data.reality_server || "addons.mozilla.org",
     serverName: data.server_name || "addons.mozilla.org",
   };

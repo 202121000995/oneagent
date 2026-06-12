@@ -54,6 +54,53 @@ func TestUpsertOutboundRenameUpdatesRouting(t *testing.T) {
 	}
 }
 
+func TestCreateProxyDoesNotCreateRoutingRule(t *testing.T) {
+	db, err := InitDatabase(filepath.Join(t.TempDir(), "nodetools.db"))
+	if err != nil {
+		t.Fatalf("InitDatabase returned error: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	manager := NewManager(db, "")
+	cfg := Config{
+		Outbounds: []OutboundConfig{
+			{Name: "proxy", Protocol: "http", Address: "127.0.0.1", Port: 8081},
+		},
+		Routing: RoutingConfig{Mode: "global", DefaultOutbound: "proxy"},
+	}
+	cfg.Server.WebPort = 8080
+	cfg.Server.AdminUser = "admin"
+	cfg.Server.AdminPass = "password123"
+	if err := manager.ApplyConfig(cfg); err != nil {
+		t.Fatalf("ApplyConfig returned error: %v", err)
+	}
+
+	if _, err := manager.CreateProxy(ProxyCreateRequest{
+		Name:     "local",
+		Protocol: "mixed",
+		Listen:   "0.0.0.0",
+		Port:     1080,
+		Outbound: "proxy",
+	}); err != nil {
+		t.Fatalf("CreateProxy returned error: %v", err)
+	}
+
+	snapshot := manager.ConfigSnapshot()
+	if len(snapshot.Routing.Rules) != 0 {
+		t.Fatalf("expected inbound creation to leave routing rules unchanged, got %#v", snapshot.Routing.Rules)
+	}
+}
+
+func TestProbeInboundGoogleUnsupportedProtocol(t *testing.T) {
+	health := probeInboundGoogle(InboundConfig{Name: "vless-in", Protocol: "vless", Port: 443})
+	if health.Status != "unsupported" {
+		t.Fatalf("expected unsupported status, got %#v", health)
+	}
+	if health.LastError == "" {
+		t.Fatal("expected unsupported reason")
+	}
+}
+
 func TestEnabledRuntimeKeepsSplitRules(t *testing.T) {
 	_, _, routing := enabledRuntime(
 		[]InboundConfig{{Name: "local", Protocol: "mixed", Port: 7890}},

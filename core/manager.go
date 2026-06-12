@@ -351,11 +351,6 @@ func (m *Manager) CreateProxy(req ProxyCreateRequest) (Node, error) {
 	if _, exists := m.inbounds[req.Name]; exists {
 		return Node{}, fmt.Errorf("inbound %q already exists", req.Name)
 	}
-	if req.Outbound != "" {
-		if _, exists := m.outbounds[req.Outbound]; !exists {
-			return Node{}, fmt.Errorf("outbound %q does not exist", req.Outbound)
-		}
-	}
 
 	inbound := InboundConfig{
 		Name:                   req.Name,
@@ -394,11 +389,6 @@ func (m *Manager) CreateProxy(req ProxyCreateRequest) (Node, error) {
 	}
 	m.inbounds[inbound.Name] = inbound
 	m.cfg.Inbounds = append(m.cfg.Inbounds, inbound)
-	if req.Outbound != "" {
-		rule := RoutingRule{Name: req.Name + "-route", Inbound: req.Name, Outbound: req.Outbound, Priority: nextRulePriority(m.rules)}
-		m.rules = append(m.rules, rule)
-		m.cfg.Routing.Rules = append(m.cfg.Routing.Rules, rule)
-	}
 	m.ensureTrafficLocked(req.Name)
 	m.ensureHealthLocked(req.Name, inbound.Disabled)
 	if err := m.commitLocked(); err != nil {
@@ -478,16 +468,6 @@ func (m *Manager) UpsertInbound(inbound InboundConfig) (Node, error) {
 	defer m.mu.Unlock()
 	m.inbounds[inbound.Name] = inbound
 	m.cfg.Inbounds = upsertInboundConfig(m.cfg.Inbounds, inbound)
-	if inbound.Outbound != "" {
-		if _, exists := m.outbounds[inbound.Outbound]; !exists {
-			return Node{}, fmt.Errorf("outbound %q does not exist", inbound.Outbound)
-		}
-		m.rules = deleteRulesForNode(m.rules, "inbound", inbound.Name)
-		m.cfg.Routing.Rules = deleteRulesForNode(m.cfg.Routing.Rules, "inbound", inbound.Name)
-		rule := RoutingRule{Name: inbound.Name + "-route", Inbound: inbound.Name, Outbound: inbound.Outbound, Priority: nextRulePriority(m.rules)}
-		m.rules = append(m.rules, rule)
-		m.cfg.Routing.Rules = append(m.cfg.Routing.Rules, rule)
-	}
 	m.ensureTrafficLocked(inbound.Name)
 	m.ensureHealthLocked(inbound.Name, inbound.Disabled)
 	if err := m.commitLocked(); err != nil {
@@ -703,17 +683,26 @@ func (m *Manager) SetNodeEnabled(nodeType, name string, enabled bool) (Node, err
 
 func (m *Manager) TestNode(nodeType, name string) (NodeTestResult, error) {
 	m.mu.RLock()
-	target, disabled, outbound, err := m.probeTargetLocked(nodeType, name)
 	cfg := m.cfg
-	m.mu.RUnlock()
-	if err != nil {
-		return NodeTestResult{}, err
-	}
 	var health Health
-	if nodeType == "outbound" {
+	switch nodeType {
+	case "inbound":
+		inbound, ok := m.inbounds[name]
+		m.mu.RUnlock()
+		if !ok {
+			return NodeTestResult{}, fmt.Errorf("inbound %q does not exist", name)
+		}
+		health = probeInboundGoogle(inbound)
+	case "outbound":
+		_, disabled, outbound, err := m.probeTargetLocked(nodeType, name)
+		m.mu.RUnlock()
+		if err != nil {
+			return NodeTestResult{}, err
+		}
 		health = m.probeOutbound(outbound, cfg, disabled)
-	} else {
-		health = probeTCP(target, disabled)
+	default:
+		m.mu.RUnlock()
+		return NodeTestResult{}, fmt.Errorf("node type must be inbound or outbound")
 	}
 	m.mu.Lock()
 	m.health[name] = health
@@ -726,6 +715,45 @@ func (m *Manager) TestNode(nodeType, name string) (NodeTestResult, error) {
 		Error:     health.LastError,
 		UpdatedAt: health.UpdatedAt.Format(time.RFC3339),
 	}, nil
+}
+
+func probeInboundGoogle(inbound InboundConfig) Health {
+	now := time.Now()
+	if inbound.Disabled {
+		return Health{Status: "disabled", LastError: "node disabled", UpdatedAt: now}
+	}
+	switch inbound.Protocol {
+	case "mixed", "http":
+	default:
+		return Health{
+			Status:    "unsupported",
+			LastError: fmt.Sprintf("%s 入站需要对应客户端协议握手；当前仅支持 mixed/http 入站做 Google 链路测试", inbound.Protocol),
+			UpdatedAt: now,
+		}
+	}
+	proxyURL := &url.URL{
+		Scheme: "http",
+		Host:   net.JoinHostPort("127.0.0.1", fmt.Sprintf("%d", inbound.Port)),
+	}
+	if inbound.Username != "" || inbound.Password != "" {
+		proxyURL.User = url.UserPassword(inbound.Username, inbound.Password)
+	}
+	client := &http.Client{
+		Timeout: 10 * time.Second,
+		Transport: &http.Transport{
+			Proxy: http.ProxyURL(proxyURL),
+		},
+	}
+	start := time.Now()
+	resp, err := client.Get("http://www.google.com/generate_204")
+	if err != nil {
+		return Health{Status: "offline", LastError: "Google 链路测试失败: " + compactError(err.Error()), UpdatedAt: now}
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 400 {
+		return Health{Status: "offline", LastError: fmt.Sprintf("Google 链路测试 HTTP 状态异常: %d", resp.StatusCode), UpdatedAt: now}
+	}
+	return Health{Status: "online", LatencyMS: time.Since(start).Milliseconds(), LastError: "Google 链路测试通过", UpdatedAt: now}
 }
 
 func (m *Manager) probeAllNodes() {

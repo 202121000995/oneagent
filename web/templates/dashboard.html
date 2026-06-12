@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>NodeTools Agent</title>
-  <link rel="stylesheet" href="/static/css/style.css?v=20260612-15">
+  <link rel="stylesheet" href="/static/css/style.css?v=20260612-16">
 </head>
 <body>
   <div class="app-shell">
@@ -87,7 +87,7 @@
           <div class="panel-header">
             <div>
               <h2>入站列表</h2>
-              <span>创建本地监听端口，让系统或其他程序连进来，再选择一个出站节点转发</span>
+              <span>创建监听端口，让系统或其他程序连进来；出口统一在路由策略里决定</span>
             </div>
             <div class="panel-actions">
               <button type="button" class="ghost-button" data-batch-action="test" data-batch-scope="inbound">批量测速</button>
@@ -106,7 +106,7 @@
                   <th>名称</th>
                   <th>协议</th>
                   <th>监听端口</th>
-                  <th>使用出站</th>
+                  <th>路由出口</th>
                   <th>上传</th>
                   <th>下载</th>
                   <th>延迟</th>
@@ -423,9 +423,6 @@ sudo sh /opt/nodetools-agent/current/rollback-offline.sh</textarea></label>
           </label>
           <label>监听端口<input name="port" type="number" min="1" max="65535" placeholder="1080"></label>
           <div class="dynamic-fields full-width" id="inboundDynamicFields"></div>
-          <label class="full-width">选择出站
-            <select name="outbound" id="inboundOutboundSelect"></select>
-          </label>
           <label class="full-width">分享链接主机名/IP<input name="share_host" placeholder="你的服务器 IP 或域名，导出分享链接时使用"></label>
         </div>
         <div class="modal-footer">
@@ -472,9 +469,6 @@ sudo sh /opt/nodetools-agent/current/rollback-offline.sh</textarea></label>
               <option value="127.0.0.1">127.0.0.1</option>
             </select>
           </label>
-          <label>选择出站
-            <select name="outbound" id="batchInboundOutboundSelect"></select>
-          </label>
           <label>Reality 目标网站<input name="reality_server" value="addons.mozilla.org"></label>
           <label>TLS Server Name<input name="server_name" value="addons.mozilla.org"></label>
           <label class="check-label"><input name="vless_reality" type="checkbox" checked> VLESS Reality</label>
@@ -509,6 +503,6 @@ sudo sh /opt/nodetools-agent/current/rollback-offline.sh</textarea></label>
     </section>
   </div>
 
-  <script src="/static/js/dashboard.js?v=20260612-15"></script>
+  <script src="/static/js/dashboard.js?v=20260612-16"></script>
 </body>
 </html>
