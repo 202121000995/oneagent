@@ -573,6 +573,9 @@ const legacyHealthByName = (nodes = []) => {
 
 const v2EntryNode = (entry, health) => {
   const probe = health.get(entry.id) || health.get(entry.name) || {};
+  const enabled = entry.enabled !== false;
+  const probeStatus = enabled && probe.status === "disabled" ? "unknown" : probe.status;
+  const staleDisabled = enabled && probe.status === "disabled";
   return {
     name: entry.id,
     display_name: entry.name || entry.id,
@@ -580,12 +583,12 @@ const v2EntryNode = (entry, health) => {
     protocol: entry.type,
     address: entry.listen || "0.0.0.0",
     port: entry.port,
-    enabled: entry.enabled !== false,
-    status: probe.status || (entry.enabled === false ? "disabled" : "unknown"),
+    enabled,
+    status: enabled ? (probeStatus || "unknown") : "disabled",
     latency_ms: probe.latency_ms || 0,
-    last_error: probe.last_error || "",
-    diagnosis: probe.diagnosis || "",
-    diagnosis_hint: probe.diagnosis_hint || "",
+    last_error: staleDisabled ? "" : (probe.last_error || ""),
+    diagnosis: staleDisabled ? "" : (probe.diagnosis || ""),
+    diagnosis_hint: staleDisabled ? "" : (probe.diagnosis_hint || ""),
     upload_bytes: probe.upload_bytes || 0,
     download_bytes: probe.download_bytes || 0,
     updated_at: probe.updated_at || new Date().toISOString(),
@@ -659,11 +662,17 @@ const selectedValues = (container) => Array.from(container?.querySelectorAll('in
 const renderCheckList = (container, name, items, selected, emptyText) => {
   if (!container) return;
   const selectedSet = new Set(selected || []);
+  const kindClass = (kind = "") => {
+    if (kind === "区域组") return "policy-member-region";
+    if (kind === "节点") return "policy-member-node";
+    if (kind === "基础") return "policy-member-base";
+    return "policy-member-node";
+  };
   container.innerHTML = items.length ? items.map((item) => `
-    <label class="policy-member-row">
+    <label class="policy-member-row ${kindClass(item.kind)}">
       <input type="checkbox" name="${name}" value="${escapeHTML(item.id)}"${selectedSet.has(item.id) ? " checked" : ""}>
-      <span>${escapeHTML(item.label)}</span>
-      <small>${escapeHTML(item.kind || "")}</small>
+      <span class="policy-member-name">${escapeHTML(item.label)}</span>
+      <small class="policy-member-kind">${escapeHTML(item.kind || "")}</small>
     </label>
   `).join("") : `<div class="empty-cell">${escapeHTML(emptyText)}</div>`;
 };
@@ -1385,7 +1394,7 @@ const openRegionGroupEditor = (id) => {
   renderCheckList(
     document.getElementById("regionGroupNodeList"),
     "node_ids",
-    getV2Nodes().map((node) => ({ id: node.id, label: `${node.name || node.id} (${node.id})`, kind: node.region || "other" })),
+    getV2Nodes().map((node) => ({ id: node.id, label: `${node.name || node.id} (${node.id})`, kind: "节点" })),
     group.node_ids || [],
     "节点池为空",
   );

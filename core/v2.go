@@ -61,6 +61,20 @@ func NormalizeV2Config(cfg Config) Config {
 	cfg.RuleSets = normalizeRuleSets(cfg.RuleSets)
 	cfg.RouteRules = normalizeRouteRules(cfg.RouteRules, cfg.Routing)
 	cfg.RouteRules = normalizeRouteRuleRefs(cfg.RouteRules, cfg.Entries, cfg.Nodes, cfg.RegionGroups, cfg.AppPolicyGroups)
+	cfg = syncV2RuntimeFields(cfg)
+	return cfg
+}
+
+func syncV2RuntimeFields(cfg Config) Config {
+	cfg.Inbounds = make([]InboundConfig, 0, len(cfg.Entries))
+	for _, entry := range cfg.Entries {
+		cfg.Inbounds = append(cfg.Inbounds, v2EntryToInbound(entry))
+	}
+	cfg.Outbounds = make([]OutboundConfig, 0, len(cfg.Nodes))
+	for _, node := range cfg.Nodes {
+		cfg.Outbounds = append(cfg.Outbounds, v2NodeToOutbound(node))
+	}
+	cfg.Routing = v2RouteRulesToRouting(cfg.RouteRules)
 	return cfg
 }
 
@@ -364,6 +378,9 @@ func normalizeRouteRules(rules []RouteRuleConfig, legacy RoutingConfig) []RouteR
 				rules[i].ID = stableID("rule", firstNonEmpty(rules[i].Name, rules[i].MatchValue, rules[i].RuleSet))
 			}
 		}
+		if isLegacyInboundPassthroughRouteSet(rules) {
+			return append([]RouteRuleConfig(nil), defaultRouteRules...)
+		}
 		return rules
 	}
 	if len(legacy.Rules) > 0 {
@@ -383,9 +400,33 @@ func normalizeRouteRules(rules []RouteRuleConfig, legacy RoutingConfig) []RouteR
 		if legacy.DefaultOutbound != "" {
 			out = append(out, RouteRuleConfig{ID: "rule-final", Name: "Final", MatchType: "final", Outbound: legacy.DefaultOutbound, Enabled: true, Order: 9999})
 		}
+		if isLegacyInboundPassthroughRouteSet(out) {
+			return append([]RouteRuleConfig(nil), defaultRouteRules...)
+		}
 		return out
 	}
 	return append([]RouteRuleConfig(nil), defaultRouteRules...)
+}
+
+func isLegacyInboundPassthroughRouteSet(rules []RouteRuleConfig) bool {
+	if len(rules) == 0 {
+		return false
+	}
+	hasInboundPassthrough := false
+	for _, rule := range rules {
+		matchType := firstNonEmpty(rule.MatchType, "domain_suffix")
+		if matchType == "final" {
+			continue
+		}
+		outbound := strings.ToLower(rule.Outbound)
+		if matchType != "inbound" || (outbound != "direct" && outbound != "block") {
+			return false
+		}
+		if rule.Inbound != "" || rule.MatchValue != "" {
+			hasInboundPassthrough = true
+		}
+	}
+	return hasInboundPassthrough
 }
 
 func normalizeRouteRuleRefs(rules []RouteRuleConfig, entries []EntryConfig, nodes []OutboundNodeConfig, groups []RegionGroupConfig, policies []AppPolicyGroupConfig) []RouteRuleConfig {

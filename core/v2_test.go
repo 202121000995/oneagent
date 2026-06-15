@@ -99,11 +99,10 @@ func TestNormalizeV2ConfigRewritesLegacyRouteRefs(t *testing.T) {
 			Enabled: true,
 		}},
 		RouteRules: []RouteRuleConfig{{
-			ID:         "rule-local",
-			Name:       "Local-Mixed",
-			MatchType:  "inbound",
-			MatchValue: "Local-Mixed",
-			Inbound:    "Local-Mixed",
+			ID:         "rule-example",
+			Name:       "Example",
+			MatchType:  "domain_suffix",
+			MatchValue: "example.com",
 			Outbound:   "Direct",
 			Enabled:    true,
 			Order:      10,
@@ -113,14 +112,51 @@ func TestNormalizeV2ConfigRewritesLegacyRouteRefs(t *testing.T) {
 	cfg.Server.AdminUser = "admin"
 	cfg.Server.AdminPass = "password123"
 
-	if cfg.RouteRules[0].Inbound != "entry-local-mixed" || cfg.RouteRules[0].MatchValue != "entry-local-mixed" {
-		t.Fatalf("expected legacy inbound name to normalize to entry id, got %#v", cfg.RouteRules[0])
-	}
 	if cfg.RouteRules[0].Outbound != "direct" {
 		t.Fatalf("expected legacy Direct outbound to normalize to direct, got %#v", cfg.RouteRules[0])
 	}
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("expected v2 route rule to validate after ref normalization: %v", err)
+	}
+}
+
+func TestNormalizeV2ConfigReplacesLegacyInboundDirectRoute(t *testing.T) {
+	cfg := NormalizeV2Config(Config{
+		ModelVersion: "v2",
+		Entries: []EntryConfig{{
+			ID:      "entry-local-mixed",
+			Name:    "Local-Mixed",
+			Type:    "mixed",
+			Listen:  "127.0.0.1",
+			Port:    1080,
+			Enabled: true,
+		}},
+		RouteRules: []RouteRuleConfig{{
+			ID:         "rule-local",
+			Name:       "Local-Mixed",
+			MatchType:  "inbound",
+			MatchValue: "entry-local-mixed",
+			Inbound:    "entry-local-mixed",
+			Outbound:   "direct",
+			Enabled:    true,
+			Order:      10,
+		}},
+	})
+	cfg.Server.WebPort = 8080
+	cfg.Server.AdminUser = "admin"
+	cfg.Server.AdminPass = "password123"
+
+	if len(cfg.RouteRules) < 2 || cfg.RouteRules[0].ID != "rule-adblock" || cfg.RouteRules[len(cfg.RouteRules)-1].Outbound != "policy-final" {
+		t.Fatalf("expected legacy inbound direct route to be replaced by v2 defaults, got %#v", cfg.RouteRules)
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("expected default v2 route rules to validate: %v", err)
+	}
+	if len(cfg.Routing.Rules) == 0 || cfg.Routing.Rules[0].Outbound != "policy-adblock" {
+		t.Fatalf("expected legacy routing cache to sync to v2 route rules, got %#v", cfg.Routing)
+	}
+	if cfg.Routing.DefaultOutbound != "policy-final" {
+		t.Fatalf("expected legacy routing final to sync to policy-final, got %#v", cfg.Routing)
 	}
 }
 

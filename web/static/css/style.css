@@ -636,24 +636,55 @@ button:hover {
 
 .policy-member-row {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
   align-items: center;
   gap: 8px;
   min-height: 40px;
-  padding: 8px 10px;
+  padding: 7px 10px;
   border: 1px solid var(--line);
   border-radius: 6px;
   background: #fff;
+  font-size: 13px;
+  line-height: 1.2;
 }
 
-.policy-member-row span {
+.policy-member-row input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+}
+
+.policy-member-base {
+  border-color: #cbd5e1;
+  background: #f8fafc;
+}
+
+.policy-member-region {
+  border-color: #8ecae6;
+  background: #eff8ff;
+}
+
+.policy-member-node {
+  border-color: #9bd7b8;
+  background: #f0fbf5;
+}
+
+.policy-member-name {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  color: #20313f;
+  font-weight: 700;
 }
 
-.policy-member-row small {
-  color: var(--muted);
+.policy-member-kind {
+  padding: 3px 7px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.78);
+  color: #526a78;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
 }
 
 .qr-wrap {

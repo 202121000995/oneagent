@@ -1639,12 +1639,7 @@ func (m *Manager) TestNode(nodeType, name string) (NodeTestResult, error) {
 	}, nil
 }
 
-func (m *Manager) probeInboundGoogle(inbound InboundConfig, cfg Config) Health {
-	if cfg.Kernel.Type == "sing-box" {
-		if executable := firstNonEmpty(cfg.Kernel.Executable, findExecutable("sing-box")); executable != "" {
-			return probeInboundWithSingBox(executable, inbound)
-		}
-	}
+func (m *Manager) probeInboundGoogle(inbound InboundConfig, _ Config) Health {
 	return probeHTTPProxyInboundGoogle(inbound)
 }
 
@@ -1653,17 +1648,20 @@ func probeHTTPProxyInboundGoogle(inbound InboundConfig) Health {
 	if inbound.Disabled {
 		return Health{Status: "disabled", LastError: "node disabled", UpdatedAt: now}
 	}
+	scheme := "http"
 	switch inbound.Protocol {
 	case "mixed", "http":
+	case "socks", "socks5":
+		scheme = "socks5"
 	default:
 		return Health{
 			Status:    "unsupported",
-			LastError: fmt.Sprintf("%s 入站需要对应客户端协议握手；当前仅支持 mixed/http 入站做 Google 链路测试", inbound.Protocol),
+			LastError: fmt.Sprintf("%s 入站需要对应客户端协议握手；当前仅支持 mixed/http/socks 入站做 Google 链路测试", inbound.Protocol),
 			UpdatedAt: now,
 		}
 	}
 	proxyURL := &url.URL{
-		Scheme: "http",
+		Scheme: scheme,
 		Host:   net.JoinHostPort("127.0.0.1", fmt.Sprintf("%d", inbound.Port)),
 	}
 	if inbound.Username != "" || inbound.Password != "" {
@@ -1676,7 +1674,7 @@ func probeHTTPProxyInboundGoogle(inbound InboundConfig) Health {
 		},
 	}
 	start := time.Now()
-	resp, err := client.Get("http://www.google.com/generate_204")
+	resp, err := client.Get("http://www.gstatic.com/generate_204")
 	if err != nil {
 		return Health{Status: "offline", LastError: "Google 链路测试失败: " + compactError(err.Error()), UpdatedAt: now}
 	}
