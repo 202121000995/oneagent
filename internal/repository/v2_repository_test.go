@@ -40,7 +40,6 @@ func TestV2RepositorySaveAndLoadModel(t *testing.T) {
 			Type:            "auto",
 			Enabled:         true,
 			RefreshInterval: 3600,
-			ExcludedNodeIDs: []string{"node-deleted"},
 		}},
 		Nodes: []model.OutboundNodeConfig{{
 			ID:             "node-sg-001",
@@ -101,9 +100,6 @@ func TestV2RepositorySaveAndLoadModel(t *testing.T) {
 	}
 	if len(output.Nodes) != 1 || output.Nodes[0].ID != "node-sg-001" || output.Nodes[0].RawConfig["server"] != "sg.example.com" {
 		t.Fatalf("unexpected node round trip: %#v", output.Nodes)
-	}
-	if len(output.Subscriptions) != 1 || len(output.Subscriptions[0].ExcludedNodeIDs) != 1 || output.Subscriptions[0].ExcludedNodeIDs[0] != "node-deleted" {
-		t.Fatalf("unexpected subscription round trip: %#v", output.Subscriptions)
 	}
 	if len(output.AppPolicyGroups) != 1 || output.AppPolicyGroups[0].Candidates[0] != "region-sg" {
 		t.Fatalf("unexpected policy round trip: %#v", output.AppPolicyGroups)

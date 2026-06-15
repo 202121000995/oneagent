@@ -205,7 +205,6 @@ func normalizeSubscriptions(subscriptions []SubscriptionConfig, providers []Prox
 		if sub.RefreshInterval == 0 {
 			sub.RefreshInterval = 3600
 		}
-		sub.ExcludedNodeIDs = uniqueStrings(sub.ExcludedNodeIDs)
 		byID[sub.ID] = sub
 	}
 	for _, provider := range providers {
@@ -232,13 +231,9 @@ func normalizeSubscriptions(subscriptions []SubscriptionConfig, providers []Prox
 
 func normalizeOutboundNodes(nodes []OutboundNodeConfig, legacy []OutboundConfig, subscriptions []SubscriptionConfig) []OutboundNodeConfig {
 	byID := map[string]OutboundNodeConfig{}
-	excluded := excludedNodeIDs(subscriptions)
 	for _, node := range nodes {
 		if node.ID == "" {
 			node.ID = stableID("node", node.Name)
-		}
-		if _, ok := excluded[node.ID]; ok && node.Source == "subscription" {
-			continue
 		}
 		if node.Name == "" {
 			node.Name = node.ID
@@ -260,9 +255,6 @@ func normalizeOutboundNodes(nodes []OutboundNodeConfig, legacy []OutboundConfig,
 			continue
 		}
 		id := stableID("node", outbound.Name)
-		if _, ok := excluded[id]; ok {
-			continue
-		}
 		raw := outboundToRawConfig(outbound)
 		source := "manual"
 		if outbound.Subscription != "" {
@@ -293,19 +285,6 @@ func normalizeOutboundNodes(nodes []OutboundNodeConfig, legacy []OutboundConfig,
 		out = append(out, node)
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].Name < out[j].Name })
-	return out
-}
-
-func excludedNodeIDs(subscriptions []SubscriptionConfig) map[string]struct{} {
-	out := map[string]struct{}{}
-	for _, sub := range subscriptions {
-		for _, id := range sub.ExcludedNodeIDs {
-			id = strings.TrimSpace(id)
-			if id != "" {
-				out[id] = struct{}{}
-			}
-		}
-	}
 	return out
 }
 

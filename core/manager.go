@@ -120,7 +120,6 @@ type SubscriptionUpdateResult struct {
 	Added         int      `json:"added"`
 	Updated       int      `json:"updated"`
 	Unchanged     int      `json:"unchanged"`
-	Skipped       int      `json:"skipped"`
 	ImportedNodes []string `json:"imported_nodes,omitempty"`
 	Errors        []string `json:"errors,omitempty"`
 	Warnings      []string `json:"warnings,omitempty"`
@@ -143,7 +142,6 @@ type ImportOutboundsReport struct {
 	Added     int                    `json:"added"`
 	Updated   int                    `json:"updated"`
 	Unchanged int                    `json:"unchanged"`
-	Skipped   int                    `json:"skipped"`
 	Details   []ImportOutboundDetail `json:"details,omitempty"`
 }
 
@@ -1058,19 +1056,6 @@ func (m *Manager) ImportOutboundsReportWithOptions(outbounds []OutboundConfig, o
 		outbound = enrichOutboundFromRaw(outbound)
 		outbound = applyProviderImportOptions(outbound, options.Provider, options.FromSubscription)
 		originalName := outbound.Name
-		if options.FromSubscription && m.subscriptionImportExcludedLocked(outbound, options.Provider) {
-			report.Skipped++
-			report.Details = append(report.Details, ImportOutboundDetail{
-				Name:         firstNonEmpty(outbound.Name, outbound.Protocol+"-"+outbound.Address),
-				OriginalName: originalName,
-				Protocol:     outbound.Protocol,
-				Address:      outbound.Address,
-				Port:         outbound.Port,
-				Action:       "skipped",
-				Warnings:     []string{"节点已手动删除，订阅刷新跳过"},
-			})
-			continue
-		}
 		action := "added"
 		preservedName := false
 		if outbound.Name == "" {
@@ -1131,26 +1116,6 @@ func (m *Manager) ImportOutboundsReportWithOptions(outbounds []OutboundConfig, o
 	return report, nil
 }
 
-func (m *Manager) subscriptionImportExcludedLocked(outbound OutboundConfig, provider ProxyProviderConfig) bool {
-	name := outbound.Name
-	if name == "" {
-		name = outbound.Protocol + "-" + outbound.Address
-	}
-	id := stableID("node", name)
-	cfg := NormalizeV2Config(m.cfg)
-	for _, sub := range cfg.Subscriptions {
-		if provider.Name != sub.ID && provider.Name != sub.Name {
-			continue
-		}
-		for _, excluded := range sub.ExcludedNodeIDs {
-			if excluded == id {
-				return true
-			}
-		}
-	}
-	return false
-}
-
 func (m *Manager) UpdateSubscriptions() ([]SubscriptionUpdateResult, error) {
 	m.mu.RLock()
 	cfg := NormalizeV2Config(m.cfg)
@@ -1190,7 +1155,6 @@ func (m *Manager) updateSubscriptionsForProviders(providers []ProxyProviderConfi
 				result.Added = report.Added
 				result.Updated = report.Updated
 				result.Unchanged = report.Unchanged
-				result.Skipped = report.Skipped
 				for _, detail := range report.Details {
 					result.Warnings = append(result.Warnings, detail.Warnings...)
 				}
@@ -1227,7 +1191,7 @@ func (m *Manager) StartSubscriptionUpdater() {
 					if len(result.Errors) > 0 {
 						log.Printf("subscription %s auto update finished with errors: %s", result.Provider, strings.Join(result.Errors, "; "))
 					} else {
-						log.Printf("subscription %s auto updated: parsed=%d imported=%d added=%d updated=%d unchanged=%d skipped=%d", result.Provider, result.Parsed, result.Imported, result.Added, result.Updated, result.Unchanged, result.Skipped)
+						log.Printf("subscription %s auto updated: parsed=%d imported=%d added=%d updated=%d unchanged=%d", result.Provider, result.Parsed, result.Imported, result.Added, result.Updated, result.Unchanged)
 					}
 				}
 			}

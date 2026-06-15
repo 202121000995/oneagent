@@ -257,6 +257,36 @@ th {
   text-transform: uppercase;
 }
 
+.node-select-cell {
+  width: 58px;
+  padding: 6px 10px;
+  text-align: center;
+}
+
+.node-select-box {
+  display: inline-grid;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f8fafc;
+  cursor: pointer;
+}
+
+.node-select-box:hover {
+  border-color: var(--accent);
+  background: #eef5f4;
+}
+
+.node-select-box input[type="checkbox"] {
+  width: 20px;
+  height: 20px;
+  margin: 0;
+  cursor: pointer;
+  accent-color: var(--accent);
+}
+
 .empty-cell {
   color: var(--muted);
   text-align: center;

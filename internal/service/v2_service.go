@@ -143,21 +143,11 @@ func (s V2ModelService) ImportNodes(m model.V2Model, nodes []model.OutboundNodeC
 }
 
 func (s V2ModelService) DeleteNode(m model.V2Model, id string) (model.V2Model, error) {
-	var deleted model.OutboundNodeConfig
-	for _, node := range m.Nodes {
-		if node.ID == id {
-			deleted = node
-			break
-		}
-	}
 	next, ok := deleteByID(m.Nodes, id)
 	if !ok {
 		return m, fmt.Errorf("node %q does not exist", id)
 	}
 	m.Nodes = next
-	if subscriptionForNode(m.Subscriptions, deleted) != nil {
-		m.Subscriptions = excludeSubscriptionNode(m.Subscriptions, deleted)
-	}
 	m = removeNodeRefs(m, id)
 	return m, nil
 }
@@ -454,26 +444,6 @@ func removeString(items []string, value string) []string {
 		}
 	}
 	return out
-}
-
-func excludeSubscriptionNode(subscriptions []model.SubscriptionConfig, node model.OutboundNodeConfig) []model.SubscriptionConfig {
-	out := append([]model.SubscriptionConfig(nil), subscriptions...)
-	for i := range out {
-		if !nodeBelongsToSubscription(node, out[i]) {
-			continue
-		}
-		out[i].ExcludedNodeIDs = uniqueStrings(append(out[i].ExcludedNodeIDs, node.ID))
-	}
-	return out
-}
-
-func subscriptionForNode(subscriptions []model.SubscriptionConfig, node model.OutboundNodeConfig) *model.SubscriptionConfig {
-	for i := range subscriptions {
-		if nodeBelongsToSubscription(node, subscriptions[i]) {
-			return &subscriptions[i]
-		}
-	}
-	return nil
 }
 
 func nodeBelongsToSubscription(node model.OutboundNodeConfig, sub model.SubscriptionConfig) bool {

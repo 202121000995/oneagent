@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"strings"
 	"time"
 
 	"nodetoolsagent/internal/model"
@@ -33,7 +32,6 @@ CREATE TABLE IF NOT EXISTS v2_subscriptions (
 	enabled INTEGER NOT NULL DEFAULT 1,
 	refresh_interval INTEGER NOT NULL DEFAULT 3600,
 	last_update_at TEXT NOT NULL DEFAULT '',
-	excluded_node_ids_json TEXT NOT NULL DEFAULT '[]',
 	updated_at TEXT NOT NULL
 );
 
@@ -116,35 +114,7 @@ func NewV2Repository(db *sql.DB) *V2Repository {
 }
 
 func (r *V2Repository) Migrate(ctx context.Context) error {
-	if _, err := r.db.ExecContext(ctx, V2SchemaSQL); err != nil {
-		return err
-	}
-	return r.addColumnIfMissing(ctx, "v2_subscriptions", "excluded_node_ids_json", "TEXT NOT NULL DEFAULT '[]'")
-}
-
-func (r *V2Repository) addColumnIfMissing(ctx context.Context, table, column, definition string) error {
-	rows, err := r.db.QueryContext(ctx, "PRAGMA table_info("+table+")")
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var cid int
-		var name, typ string
-		var notNull int
-		var defaultValue any
-		var pk int
-		if err := rows.Scan(&cid, &name, &typ, &notNull, &defaultValue, &pk); err != nil {
-			return err
-		}
-		if strings.EqualFold(name, column) {
-			return nil
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return err
-	}
-	_, err = r.db.ExecContext(ctx, fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", table, column, definition))
+	_, err := r.db.ExecContext(ctx, V2SchemaSQL)
 	return err
 }
 
@@ -188,9 +158,9 @@ func (r *V2Repository) SaveModel(ctx context.Context, m model.V2Model) error {
 			return fmt.Errorf("subscription id is required")
 		}
 		if _, err := tx.ExecContext(ctx,
-			`INSERT INTO v2_subscriptions (id, name, url, type, enabled, refresh_interval, last_update_at, excluded_node_ids_json, updated_at)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			sub.ID, sub.Name, sub.URL, sub.Type, boolInt(sub.Enabled), sub.RefreshInterval, sub.LastUpdateAt, mustJSON(sub.ExcludedNodeIDs), now,
+			`INSERT INTO v2_subscriptions (id, name, url, type, enabled, refresh_interval, last_update_at, updated_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+			sub.ID, sub.Name, sub.URL, sub.Type, boolInt(sub.Enabled), sub.RefreshInterval, sub.LastUpdateAt, now,
 		); err != nil {
 			return err
 		}
@@ -294,23 +264,18 @@ func (r *V2Repository) LoadModel(ctx context.Context) (model.V2Model, bool, erro
 		return m, false, err
 	}
 
-	rows, err = r.db.QueryContext(ctx, `SELECT id, name, url, type, enabled, refresh_interval, last_update_at, excluded_node_ids_json FROM v2_subscriptions ORDER BY name`)
+	rows, err = r.db.QueryContext(ctx, `SELECT id, name, url, type, enabled, refresh_interval, last_update_at FROM v2_subscriptions ORDER BY name`)
 	if err != nil {
 		return m, false, err
 	}
 	for rows.Next() {
 		var sub model.SubscriptionConfig
 		var enabled int
-		var excludedJSON string
-		if err := rows.Scan(&sub.ID, &sub.Name, &sub.URL, &sub.Type, &enabled, &sub.RefreshInterval, &sub.LastUpdateAt, &excludedJSON); err != nil {
+		if err := rows.Scan(&sub.ID, &sub.Name, &sub.URL, &sub.Type, &enabled, &sub.RefreshInterval, &sub.LastUpdateAt); err != nil {
 			rows.Close()
 			return m, false, err
 		}
 		sub.Enabled = enabled != 0
-		if err := decodeJSON(excludedJSON, &sub.ExcludedNodeIDs); err != nil {
-			rows.Close()
-			return m, false, err
-		}
 		m.Subscriptions = append(m.Subscriptions, sub)
 	}
 	if err := rows.Close(); err != nil {

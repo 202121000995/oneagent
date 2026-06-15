@@ -824,7 +824,11 @@ const renderInbounds = () => {
             <button class="icon-button" data-delete-type="inbound" data-delete-name="${escapeHTML(node.name)}" type="button">删除</button>
           </div>
         </td>
-        <td><input type="checkbox" data-node-check="inbound" value="${escapeHTML(node.name)}"${state.selected.inbound.has(node.name) ? " checked" : ""}></td>
+        <td class="node-select-cell">
+          <label class="node-select-box" title="选择 ${escapeHTML(node.display_name || node.name)}">
+            <input type="checkbox" data-node-check="inbound" value="${escapeHTML(node.name)}"${state.selected.inbound.has(node.name) ? " checked" : ""}>
+          </label>
+        </td>
       </tr>
     `;
   }).join("") || `<tr><td colspan="9" class="empty-cell">还没有入站，点击“添加入站”创建本地代理端口。</td></tr>`;
@@ -860,7 +864,11 @@ const renderOutbounds = () => {
           <button class="icon-button" data-delete-type="outbound" data-delete-name="${escapeHTML(node.name)}" type="button">删除</button>
         </div>
       </td>
-      <td><input type="checkbox" data-node-check="outbound" value="${escapeHTML(node.name)}"${state.selected.outbound.has(node.name) ? " checked" : ""}></td>
+      <td class="node-select-cell">
+        <label class="node-select-box" title="选择 ${escapeHTML(node.display_name || node.name)}">
+          <input type="checkbox" data-node-check="outbound" value="${escapeHTML(node.name)}"${state.selected.outbound.has(node.name) ? " checked" : ""}>
+        </label>
+      </td>
     </tr>
   `;
   }).join("") || `<tr><td colspan="10" class="empty-cell">还没有出站节点，可以导入链接或手动添加。</td></tr>`;

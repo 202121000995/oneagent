@@ -40,7 +40,7 @@ func TestUpsertExistingNodeDoesNotReassignRegionGroup(t *testing.T) {
 	}
 }
 
-func TestDeleteSubscriptionNodeAddsExclusion(t *testing.T) {
+func TestDeleteNodeRemovesPolicyReferences(t *testing.T) {
 	svc := NewV2ModelService()
 	input := model.V2Model{
 		Subscriptions: []model.SubscriptionConfig{{ID: "sub-main", Name: "Main", URL: "https://example.com/sub", Enabled: true}},
@@ -62,9 +62,6 @@ func TestDeleteSubscriptionNodeAddsExclusion(t *testing.T) {
 	}
 	if len(output.Nodes) != 0 {
 		t.Fatalf("expected node to be deleted, got %#v", output.Nodes)
-	}
-	if len(output.Subscriptions[0].ExcludedNodeIDs) != 1 || output.Subscriptions[0].ExcludedNodeIDs[0] != "node-hk-001" {
-		t.Fatalf("expected deleted subscription node to be excluded, got %#v", output.Subscriptions)
 	}
 	if len(output.RegionGroups[0].NodeIDs) != 0 || output.RegionGroups[0].SelectedNodeID != "" {
 		t.Fatalf("expected region references to be removed, got %#v", output.RegionGroups)
