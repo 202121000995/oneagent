@@ -292,12 +292,11 @@ func normalizeRegionGroups(groups []RegionGroupConfig, nodes []OutboundNodeConfi
 	for _, preset := range defaultRegionPresets {
 		group, ok := byID[preset.ID]
 		if !ok {
-			group = RegionGroupConfig{ID: preset.ID, Name: preset.Name, Mode: "smart", Enabled: true}
+			group = RegionGroupConfig{ID: preset.ID, Name: preset.Name, Mode: "smart", NodeIDs: nodeIDsForRegion(nodes, preset.Code), Enabled: true}
 		}
 		group.Smart.URL = firstNonEmpty(group.Smart.URL, defaultSmartURL)
 		group.Smart.Interval = firstNonEmpty(group.Smart.Interval, defaultSmartInterval)
 		group.Smart.Tolerance = firstNonZero(group.Smart.Tolerance, defaultTolerance)
-		group.NodeIDs = uniqueStrings(append(group.NodeIDs, nodeIDsForRegion(nodes, preset.Code)...))
 		byID[preset.ID] = group
 	}
 	out := make([]RegionGroupConfig, 0, len(byID))

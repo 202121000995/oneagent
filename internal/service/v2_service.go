@@ -94,6 +94,7 @@ func (s V2ModelService) UpsertNode(m model.V2Model, node model.OutboundNodeConfi
 	if node.ID == "" {
 		node.ID = stableID("node", firstNonEmpty(node.Name, node.Address))
 	}
+	isNew := !hasID(m.Nodes, node.ID)
 	if node.Name == "" {
 		node.Name = node.ID
 	}
@@ -113,7 +114,9 @@ func (s V2ModelService) UpsertNode(m model.V2Model, node model.OutboundNodeConfi
 		}
 	}
 	m.Nodes = upsertByID(m.Nodes, node.ID, node)
-	m.RegionGroups = assignNodeToRegionGroups(m.RegionGroups, node)
+	if isNew {
+		m.RegionGroups = assignNodeToRegionGroups(m.RegionGroups, node)
+	}
 	m.AppPolicyGroups = refreshPolicyCandidates(m.AppPolicyGroups, m.Nodes)
 	return m, node, nil
 }
@@ -374,7 +377,7 @@ func assignNodeToRegionGroups(groups []model.RegionGroupConfig, node model.Outbo
 func refreshPolicyCandidates(policies []model.AppPolicyGroupConfig, nodes []model.OutboundNodeConfig) []model.AppPolicyGroupConfig {
 	candidates := policyCandidates(nil, nodes)
 	for i := range policies {
-		if len(policies[i].Candidates) == 0 || isDefaultPolicy(policies[i].ID) {
+		if len(policies[i].Candidates) == 0 {
 			policies[i].Candidates = uniqueStrings(append(policies[i].Candidates, candidates...))
 		}
 	}

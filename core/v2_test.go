@@ -147,3 +147,30 @@ func TestNormalizeV2ConfigAddsUTLSToRealityRawConfig(t *testing.T) {
 		t.Fatalf("expected v2 raw_config to include uTLS chrome, got %#v", cfg.Nodes[0].RawConfig)
 	}
 }
+
+func TestNormalizeV2ConfigPreservesEditedRegionMembers(t *testing.T) {
+	cfg := NormalizeV2Config(Config{
+		Nodes: []OutboundNodeConfig{{
+			ID:      "node-hk-001",
+			Name:    "香港 01",
+			Type:    "vless",
+			Region:  "hk",
+			Enabled: true,
+			RawConfig: map[string]any{
+				"type": "vless",
+			},
+		}},
+		RegionGroups: []RegionGroupConfig{{
+			ID:      "region-hk",
+			Name:    "香港",
+			Mode:    "smart",
+			NodeIDs: []string{},
+			Enabled: true,
+		}},
+	})
+	for _, group := range cfg.RegionGroups {
+		if group.ID == "region-hk" && len(group.NodeIDs) != 0 {
+			t.Fatalf("expected edited region members to be preserved, got %#v", group.NodeIDs)
+		}
+	}
+}

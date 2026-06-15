@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>NodeTools Agent</title>
-  <link rel="stylesheet" href="/static/css/style.css?v=20260615-v2">
+  <link rel="stylesheet" href="/static/css/style.css?v=20260615-policy-editor">
 </head>
 <body>
   <div class="app-shell">
@@ -199,6 +199,7 @@
                   <th>当前选择</th>
                   <th>节点数</th>
                   <th>Smart 设置</th>
+                  <th>操作</th>
                 </tr>
               </thead>
               <tbody id="regionGroupRows"></tbody>
@@ -220,6 +221,7 @@
                   <th>当前选择</th>
                   <th>候选数</th>
                   <th>状态</th>
+                  <th>操作</th>
                 </tr>
               </thead>
               <tbody id="appPolicyRows"></tbody>
@@ -608,8 +610,72 @@ sudo sh /opt/nodetools-agent/current/rollback-offline.sh</textarea></label>
         <button type="button" data-close-modal>关闭</button>
       </div>
     </section>
+
+    <section class="modal wide-modal" id="regionGroupModal" role="dialog" aria-modal="true" aria-labelledby="regionGroupModalTitle" hidden>
+      <form id="regionGroupForm">
+        <input type="hidden" name="id">
+        <div class="modal-header">
+          <h2 id="regionGroupModalTitle">编辑区域策略组</h2>
+          <button type="button" class="close-button" data-close-modal>关闭</button>
+        </div>
+        <div class="modal-body two-column">
+          <label>名称<input name="name"></label>
+          <label>模式
+            <select name="mode" id="regionGroupModeSelect">
+              <option value="smart">Smart 自动</option>
+              <option value="manual">手动选择</option>
+            </select>
+          </label>
+          <label>当前手动节点
+            <select name="selected_node_id" id="regionGroupSelectedNode"></select>
+          </label>
+          <label>启用
+            <select name="enabled">
+              <option value="true">启用</option>
+              <option value="false">停用</option>
+            </select>
+          </label>
+          <label>测速 URL<input name="smart_url"></label>
+          <label>测速间隔<input name="smart_interval"></label>
+          <label>容差 ms<input name="smart_tolerance" type="number" min="0"></label>
+          <div class="policy-member-list full-width" id="regionGroupNodeList"></div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="ghost-button" data-close-modal>取消</button>
+          <button type="submit">保存区域组</button>
+        </div>
+      </form>
+    </section>
+
+    <section class="modal wide-modal" id="policyGroupModal" role="dialog" aria-modal="true" aria-labelledby="policyGroupModalTitle" hidden>
+      <form id="policyGroupForm">
+        <input type="hidden" name="id">
+        <input type="hidden" name="sort_order">
+        <div class="modal-header">
+          <h2 id="policyGroupModalTitle">编辑应用策略组</h2>
+          <button type="button" class="close-button" data-close-modal>关闭</button>
+        </div>
+        <div class="modal-body two-column">
+          <label>名称<input name="name"></label>
+          <label>当前出口
+            <select name="selected" id="policyGroupSelected"></select>
+          </label>
+          <label>启用
+            <select name="enabled">
+              <option value="true">启用</option>
+              <option value="false">停用</option>
+            </select>
+          </label>
+          <div class="policy-member-list full-width" id="policyGroupCandidateList"></div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="ghost-button" data-close-modal>取消</button>
+          <button type="submit">保存应用组</button>
+        </div>
+      </form>
+    </section>
   </div>
 
-  <script src="/static/js/dashboard.js?v=20260612-20"></script>
+  <script src="/static/js/dashboard.js?v=20260615-policy-editor"></script>
 </body>
 </html>

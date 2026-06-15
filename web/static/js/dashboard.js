@@ -625,6 +625,49 @@ const buildV2NodeRows = (model, legacyNodes) => {
 const getRules = () => state.v2Model?.route_rules || [];
 const getOutbounds = () => state.nodes.filter((node) => node.type === "outbound");
 const getInbounds = () => state.nodes.filter((node) => node.type === "inbound");
+const getV2Nodes = () => state.v2Model?.nodes || [];
+const getV2RegionGroups = () => state.v2Model?.region_groups || [];
+const getV2PolicyGroups = () => state.v2Model?.app_policy_groups || [];
+
+const targetLabel = (id) => {
+  if (!id) return "--";
+  if (id === "direct") return "Direct";
+  if (id === "block") return "Block";
+  const region = getV2RegionGroups().find((item) => item.id === id);
+  if (region) return `${region.name || region.id} (${region.id})`;
+  const policy = getV2PolicyGroups().find((item) => item.id === id);
+  if (policy) return `${policy.name || policy.id} (${policy.id})`;
+  const node = getV2Nodes().find((item) => item.id === id);
+  if (node) return `${node.name || node.id} (${node.id})`;
+  return id;
+};
+
+const policyTargetOptions = () => {
+  const base = [
+    { id: "direct", label: "Direct", kind: "基础" },
+    { id: "block", label: "Block", kind: "基础" },
+    { id: "policy-auto", label: "自动选择 (policy-auto)", kind: "基础" },
+    { id: "policy-manual", label: "节点选择 (policy-manual)", kind: "基础" },
+  ];
+  const regions = getV2RegionGroups().map((group) => ({ id: group.id, label: `${group.name || group.id} (${group.id})`, kind: "区域组" }));
+  const nodes = getV2Nodes().map((node) => ({ id: node.id, label: `${node.name || node.id} (${node.id})`, kind: "节点" }));
+  return [...base, ...regions, ...nodes];
+};
+
+const selectedValues = (container) => Array.from(container?.querySelectorAll('input[type="checkbox"]:checked') || []).map((item) => item.value);
+
+const renderCheckList = (container, name, items, selected, emptyText) => {
+  if (!container) return;
+  const selectedSet = new Set(selected || []);
+  container.innerHTML = items.length ? items.map((item) => `
+    <label class="policy-member-row">
+      <input type="checkbox" name="${name}" value="${escapeHTML(item.id)}"${selectedSet.has(item.id) ? " checked" : ""}>
+      <span>${escapeHTML(item.label)}</span>
+      <small>${escapeHTML(item.kind || "")}</small>
+    </label>
+  `).join("") : `<div class="empty-cell">${escapeHTML(emptyText)}</div>`;
+};
+
 const getInboundConfig = (id) => {
   const entry = (state.v2Model?.entries || []).find((item) => item.id === id || item.name === id);
   if (!entry) return null;
@@ -824,7 +867,7 @@ const renderPolicyGroups = () => {
     regionRows.innerHTML = regions.map((group) => {
       const smart = group.smart || {};
       const mode = group.mode === "manual" ? "手动" : "Smart";
-      const selected = group.mode === "manual" ? (group.selected_node_id || "--") : `${group.id}-auto`;
+      const selected = group.mode === "manual" ? targetLabel(group.selected_node_id) : `${group.id}-auto`;
       return `
         <tr>
           <td><div class="node-name">${escapeHTML(group.name || group.id)}</div><div class="node-hint">${escapeHTML(group.id)}</div></td>
@@ -832,19 +875,21 @@ const renderPolicyGroups = () => {
           <td>${escapeHTML(selected)}</td>
           <td>${(group.node_ids || []).length}</td>
           <td>${escapeHTML(smart.url || "--")} / ${escapeHTML(smart.interval || "--")} / ${smart.tolerance || 0}ms</td>
+          <td><button class="icon-button" data-edit-region-group="${escapeHTML(group.id)}" type="button">编辑</button></td>
         </tr>
       `;
-    }).join("") || `<tr><td colspan="5" class="empty-cell">还没有区域策略组。</td></tr>`;
+    }).join("") || `<tr><td colspan="6" class="empty-cell">还没有区域策略组。</td></tr>`;
   }
   if (policyRows) {
     policyRows.innerHTML = policies.map((policy) => `
       <tr>
         <td><div class="node-name">${escapeHTML(policy.name || policy.id)}</div><div class="node-hint">${escapeHTML(policy.id)}</div></td>
-        <td>${escapeHTML(policy.selected || "--")}</td>
+        <td>${escapeHTML(targetLabel(policy.selected))}</td>
         <td>${(policy.candidates || []).length}</td>
         <td><span class="${policy.enabled ? "badge" : "badge badge-muted"}">${policy.enabled ? "启用" : "停用"}</span></td>
+        <td><button class="icon-button" data-edit-policy-group="${escapeHTML(policy.id)}" type="button">编辑</button></td>
       </tr>
-    `).join("") || `<tr><td colspan="4" class="empty-cell">还没有应用策略组。</td></tr>`;
+    `).join("") || `<tr><td colspan="5" class="empty-cell">还没有应用策略组。</td></tr>`;
   }
   setText("policyModelUpdated", new Date().toLocaleTimeString());
 };
@@ -1317,6 +1362,66 @@ const openOutboundEditor = (name) => {
   fillForm(form, outbound);
 };
 
+const openRegionGroupEditor = (id) => {
+  const group = getV2RegionGroups().find((item) => item.id === id);
+  const form = document.getElementById("regionGroupForm");
+  if (!group || !form) return;
+  const smart = group.smart || {};
+  form.reset();
+  form.elements.id.value = group.id;
+  form.elements.name.value = group.name || group.id;
+  form.elements.mode.value = group.mode || "smart";
+  form.elements.enabled.value = group.enabled === false ? "false" : "true";
+  form.elements.smart_url.value = smart.url || "https://www.gstatic.com/generate_204";
+  form.elements.smart_interval.value = smart.interval || "3m";
+  form.elements.smart_tolerance.value = smart.tolerance || 50;
+  const selectedNode = document.getElementById("regionGroupSelectedNode");
+  if (selectedNode) {
+    const nodeIDs = new Set(group.node_ids || []);
+    const candidates = getV2Nodes().filter((node) => nodeIDs.has(node.id));
+    selectedNode.innerHTML = [`<option value="">自动</option>`, ...candidates.map((node) => `<option value="${escapeHTML(node.id)}">${escapeHTML(node.name || node.id)}</option>`)].join("");
+    selectedNode.value = group.selected_node_id || "";
+  }
+  renderCheckList(
+    document.getElementById("regionGroupNodeList"),
+    "node_ids",
+    getV2Nodes().map((node) => ({ id: node.id, label: `${node.name || node.id} (${node.id})`, kind: node.region || "other" })),
+    group.node_ids || [],
+    "节点池为空",
+  );
+  openModal("regionGroupModal");
+};
+
+const renderPolicySelectedOptions = (selected = "") => {
+  const form = document.getElementById("policyGroupForm");
+  const select = document.getElementById("policyGroupSelected");
+  if (!form || !select) return;
+  const candidates = selectedValues(document.getElementById("policyGroupCandidateList"));
+  if (selected && !candidates.includes(selected)) candidates.unshift(selected);
+  select.innerHTML = candidates.map((id) => `<option value="${escapeHTML(id)}">${escapeHTML(targetLabel(id))}</option>`).join("");
+  select.value = candidates.includes(selected) ? selected : (candidates[0] || "");
+};
+
+const openPolicyGroupEditor = (id) => {
+  const policy = getV2PolicyGroups().find((item) => item.id === id);
+  const form = document.getElementById("policyGroupForm");
+  if (!policy || !form) return;
+  form.reset();
+  form.elements.id.value = policy.id;
+  form.elements.name.value = policy.name || policy.id;
+  form.elements.sort_order.value = policy.sort_order || 0;
+  form.elements.enabled.value = policy.enabled === false ? "false" : "true";
+  renderCheckList(
+    document.getElementById("policyGroupCandidateList"),
+    "candidates",
+    policyTargetOptions(),
+    policy.candidates || [],
+    "没有可选出口",
+  );
+  renderPolicySelectedOptions(policy.selected || "");
+  openModal("policyGroupModal");
+};
+
 const closeModal = () => {
   document.getElementById("modalBackdrop")?.setAttribute("hidden", "");
   document.querySelectorAll(".modal").forEach((item) => item.hidden = true);
@@ -1534,6 +1639,19 @@ document.getElementById("inboundDynamicFields")?.addEventListener("change", (eve
   if (["security", "tls", "transport"].includes(event.target.name)) renderInboundFields();
 });
 document.getElementById("outboundProtocolSelect")?.addEventListener("change", renderOutboundFields);
+document.getElementById("regionGroupNodeList")?.addEventListener("change", () => {
+  const selectedNode = document.getElementById("regionGroupSelectedNode");
+  if (!selectedNode) return;
+  const current = selectedNode.value;
+  const nodeIDs = new Set(selectedValues(document.getElementById("regionGroupNodeList")));
+  const candidates = getV2Nodes().filter((node) => nodeIDs.has(node.id));
+  selectedNode.innerHTML = [`<option value="">自动</option>`, ...candidates.map((node) => `<option value="${escapeHTML(node.id)}">${escapeHTML(node.name || node.id)}</option>`)].join("");
+  selectedNode.value = nodeIDs.has(current) ? current : "";
+});
+document.getElementById("policyGroupCandidateList")?.addEventListener("change", () => {
+  const current = document.getElementById("policyGroupSelected")?.value || "";
+  renderPolicySelectedOptions(current);
+});
 document.getElementById("routingModeSelect")?.addEventListener("change", updateRoutingModeUI);
 document.getElementById("addRoutingRuleButton")?.addEventListener("click", () => addRoutingRule());
 document.getElementById("bypassChinaPresetButton")?.addEventListener("click", applyBypassChinaPreset);
@@ -1837,6 +1955,60 @@ document.getElementById("outboundForm")?.addEventListener("submit", async (event
   }
 });
 
+document.getElementById("regionGroupForm")?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const nodeIDs = selectedValues(document.getElementById("regionGroupNodeList"));
+  const selectedNode = form.elements.selected_node_id.value || "";
+  const payload = {
+    id: form.elements.id.value,
+    name: form.elements.name.value || form.elements.id.value,
+    mode: form.elements.mode.value || "smart",
+    selected_node_id: nodeIDs.includes(selectedNode) ? selectedNode : "",
+    smart: {
+      url: form.elements.smart_url.value || "https://www.gstatic.com/generate_204",
+      interval: form.elements.smart_interval.value || "3m",
+      tolerance: Number(form.elements.smart_tolerance.value || 50),
+    },
+    node_ids: nodeIDs,
+    enabled: form.elements.enabled.value !== "false",
+  };
+  try {
+    await sendJSON("/api/v2/region-groups", "PUT", payload);
+    closeModal();
+    await refresh();
+  } catch (error) {
+    alert(error.message);
+  }
+});
+
+document.getElementById("policyGroupForm")?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const candidates = selectedValues(document.getElementById("policyGroupCandidateList"));
+  if (candidates.length === 0) {
+    alert("请至少保留一个候选出口");
+    return;
+  }
+  const selected = form.elements.selected.value || candidates[0] || "direct";
+  const payload = {
+    id: form.elements.id.value,
+    name: form.elements.name.value || form.elements.id.value,
+    type: "selector",
+    selected: candidates.includes(selected) ? selected : (candidates[0] || "direct"),
+    candidates,
+    enabled: form.elements.enabled.value !== "false",
+    sort_order: Number(form.elements.sort_order.value || 0),
+  };
+  try {
+    await sendJSON("/api/v2/app-policy-groups", "PUT", payload);
+    closeModal();
+    await refresh();
+  } catch (error) {
+    alert(error.message);
+  }
+});
+
 const applyKernelDefaults = (form) => {
   if (!form) return;
   const type = form.elements.type?.value || "placeholder";
@@ -1973,6 +2145,18 @@ document.addEventListener("click", async (event) => {
   const editOutboundButton = event.target.closest("[data-edit-outbound]");
   if (editOutboundButton) {
     openOutboundEditor(editOutboundButton.dataset.editOutbound);
+    return;
+  }
+
+  const editRegionGroupButton = event.target.closest("[data-edit-region-group]");
+  if (editRegionGroupButton) {
+    openRegionGroupEditor(editRegionGroupButton.dataset.editRegionGroup);
+    return;
+  }
+
+  const editPolicyGroupButton = event.target.closest("[data-edit-policy-group]");
+  if (editPolicyGroupButton) {
+    openPolicyGroupEditor(editPolicyGroupButton.dataset.editPolicyGroup);
     return;
   }
 
