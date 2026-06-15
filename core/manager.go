@@ -120,6 +120,7 @@ type SubscriptionUpdateResult struct {
 	Added         int      `json:"added"`
 	Updated       int      `json:"updated"`
 	Unchanged     int      `json:"unchanged"`
+	Skipped       int      `json:"skipped"`
 	ImportedNodes []string `json:"imported_nodes,omitempty"`
 	Errors        []string `json:"errors,omitempty"`
 	Warnings      []string `json:"warnings,omitempty"`
@@ -142,6 +143,7 @@ type ImportOutboundsReport struct {
 	Added     int                    `json:"added"`
 	Updated   int                    `json:"updated"`
 	Unchanged int                    `json:"unchanged"`
+	Skipped   int                    `json:"skipped"`
 	Details   []ImportOutboundDetail `json:"details,omitempty"`
 }
 
@@ -1056,6 +1058,19 @@ func (m *Manager) ImportOutboundsReportWithOptions(outbounds []OutboundConfig, o
 		outbound = enrichOutboundFromRaw(outbound)
 		outbound = applyProviderImportOptions(outbound, options.Provider, options.FromSubscription)
 		originalName := outbound.Name
+		if options.FromSubscription && m.subscriptionImportExcludedLocked(outbound, options.Provider) {
+			report.Skipped++
+			report.Details = append(report.Details, ImportOutboundDetail{
+				Name:         firstNonEmpty(outbound.Name, outbound.Protocol+"-"+outbound.Address),
+				OriginalName: originalName,
+				Protocol:     outbound.Protocol,
+				Address:      outbound.Address,
+				Port:         outbound.Port,
+				Action:       "skipped",
+				Warnings:     []string{"节点已手动删除，订阅刷新跳过"},
+			})
+			continue
+		}
 		action := "added"
 		preservedName := false
 		if outbound.Name == "" {
@@ -1116,6 +1131,26 @@ func (m *Manager) ImportOutboundsReportWithOptions(outbounds []OutboundConfig, o
 	return report, nil
 }
 
+func (m *Manager) subscriptionImportExcludedLocked(outbound OutboundConfig, provider ProxyProviderConfig) bool {
+	name := outbound.Name
+	if name == "" {
+		name = outbound.Protocol + "-" + outbound.Address
+	}
+	id := stableID("node", name)
+	cfg := NormalizeV2Config(m.cfg)
+	for _, sub := range cfg.Subscriptions {
+		if provider.Name != sub.ID && provider.Name != sub.Name {
+			continue
+		}
+		for _, excluded := range sub.ExcludedNodeIDs {
+			if excluded == id {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func (m *Manager) UpdateSubscriptions() ([]SubscriptionUpdateResult, error) {
 	m.mu.RLock()
 	cfg := NormalizeV2Config(m.cfg)
@@ -1155,6 +1190,7 @@ func (m *Manager) updateSubscriptionsForProviders(providers []ProxyProviderConfi
 				result.Added = report.Added
 				result.Updated = report.Updated
 				result.Unchanged = report.Unchanged
+				result.Skipped = report.Skipped
 				for _, detail := range report.Details {
 					result.Warnings = append(result.Warnings, detail.Warnings...)
 				}
@@ -1191,7 +1227,7 @@ func (m *Manager) StartSubscriptionUpdater() {
 					if len(result.Errors) > 0 {
 						log.Printf("subscription %s auto update finished with errors: %s", result.Provider, strings.Join(result.Errors, "; "))
 					} else {
-						log.Printf("subscription %s auto updated: parsed=%d imported=%d added=%d updated=%d unchanged=%d", result.Provider, result.Parsed, result.Imported, result.Added, result.Updated, result.Unchanged)
+						log.Printf("subscription %s auto updated: parsed=%d imported=%d added=%d updated=%d unchanged=%d skipped=%d", result.Provider, result.Parsed, result.Imported, result.Added, result.Updated, result.Unchanged, result.Skipped)
 					}
 				}
 			}
@@ -1670,11 +1706,12 @@ func probeHTTPProxyInboundGoogle(inbound InboundConfig) Health {
 	client := &http.Client{
 		Timeout: 10 * time.Second,
 		Transport: &http.Transport{
-			Proxy: http.ProxyURL(proxyURL),
+			Proxy:             http.ProxyURL(proxyURL),
+			DisableKeepAlives: true,
 		},
 	}
 	start := time.Now()
-	resp, err := client.Get("https://www.google.com/generate_204")
+	resp, err := proxyProbeGet(client, "https://www.google.com/generate_204")
 	if err != nil {
 		return Health{Status: "offline", LastError: "Google 链路测试失败: " + compactError(err.Error()), UpdatedAt: now}
 	}
@@ -1683,6 +1720,32 @@ func probeHTTPProxyInboundGoogle(inbound InboundConfig) Health {
 		return Health{Status: "offline", LastError: fmt.Sprintf("Google 链路测试 HTTP 状态异常: %d", resp.StatusCode), UpdatedAt: now}
 	}
 	return Health{Status: "online", LatencyMS: time.Since(start).Milliseconds(), LastError: "Google 链路测试通过", UpdatedAt: now}
+}
+
+func proxyProbeGet(client *http.Client, target string) (*http.Response, error) {
+	var lastErr error
+	for attempt := 0; attempt < 2; attempt++ {
+		resp, err := client.Get(target)
+		if err == nil {
+			return resp, nil
+		}
+		lastErr = err
+		if !isRetryableProxyProbeError(err) {
+			break
+		}
+		time.Sleep(150 * time.Millisecond)
+	}
+	return nil, lastErr
+}
+
+func isRetryableProxyProbeError(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "connection reset by peer") ||
+		strings.Contains(message, "connection refused") ||
+		strings.Contains(message, "unexpected eof")
 }
 
 func probeInboundWithSingBox(executable string, inbound InboundConfig) Health {

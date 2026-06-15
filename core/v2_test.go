@@ -206,6 +206,30 @@ func TestNormalizeV2ConfigReplacesLegacyInboundDirectRoute(t *testing.T) {
 	}
 }
 
+func TestNormalizeV2ConfigSkipsExcludedSubscriptionNodes(t *testing.T) {
+	cfg := NormalizeV2Config(Config{
+		Subscriptions: []SubscriptionConfig{{
+			ID:              "sub-main",
+			Name:            "Main",
+			URL:             "https://example.com/sub",
+			Enabled:         true,
+			RefreshInterval: 3600,
+			ExcludedNodeIDs: []string{"node-hk-001"},
+		}},
+		Outbounds: []OutboundConfig{{
+			Name:         "hk-001",
+			Protocol:     "vless",
+			Address:      "hk.example.com",
+			Port:         443,
+			Subscription: "Main",
+			RawConfig:    map[string]any{"type": "vless", "server": "hk.example.com", "server_port": 443, "uuid": "bf000d23-0752-40b4-affe-68f7707a9661"},
+		}},
+	})
+	if len(cfg.Nodes) != 0 {
+		t.Fatalf("expected excluded subscription node to be skipped, got %#v", cfg.Nodes)
+	}
+}
+
 func TestNormalizeV2ConfigAddsUTLSToRealityRawConfig(t *testing.T) {
 	cfg := NormalizeV2Config(Config{
 		Outbounds: []OutboundConfig{{

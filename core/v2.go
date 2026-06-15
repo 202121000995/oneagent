@@ -55,7 +55,7 @@ func NormalizeV2Config(cfg Config) Config {
 	cfg.ModelVersion = "v2"
 	cfg.Entries = normalizeEntries(cfg.Entries, cfg.Inbounds)
 	cfg.Subscriptions = normalizeSubscriptions(cfg.Subscriptions, cfg.Mihomo.Providers)
-	cfg.Nodes = normalizeOutboundNodes(cfg.Nodes, cfg.Outbounds)
+	cfg.Nodes = normalizeOutboundNodes(cfg.Nodes, cfg.Outbounds, cfg.Subscriptions)
 	cfg.RegionGroups = normalizeRegionGroups(cfg.RegionGroups, cfg.Nodes)
 	cfg.AppPolicyGroups = normalizeAppPolicyGroups(cfg.AppPolicyGroups, cfg.Nodes)
 	cfg.RuleSets = normalizeRuleSets(cfg.RuleSets)
@@ -205,6 +205,7 @@ func normalizeSubscriptions(subscriptions []SubscriptionConfig, providers []Prox
 		if sub.RefreshInterval == 0 {
 			sub.RefreshInterval = 3600
 		}
+		sub.ExcludedNodeIDs = uniqueStrings(sub.ExcludedNodeIDs)
 		byID[sub.ID] = sub
 	}
 	for _, provider := range providers {
@@ -229,11 +230,15 @@ func normalizeSubscriptions(subscriptions []SubscriptionConfig, providers []Prox
 	return out
 }
 
-func normalizeOutboundNodes(nodes []OutboundNodeConfig, legacy []OutboundConfig) []OutboundNodeConfig {
+func normalizeOutboundNodes(nodes []OutboundNodeConfig, legacy []OutboundConfig, subscriptions []SubscriptionConfig) []OutboundNodeConfig {
 	byID := map[string]OutboundNodeConfig{}
+	excluded := excludedNodeIDs(subscriptions)
 	for _, node := range nodes {
 		if node.ID == "" {
 			node.ID = stableID("node", node.Name)
+		}
+		if _, ok := excluded[node.ID]; ok && node.Source == "subscription" {
+			continue
 		}
 		if node.Name == "" {
 			node.Name = node.ID
@@ -244,6 +249,10 @@ func normalizeOutboundNodes(nodes []OutboundNodeConfig, legacy []OutboundConfig)
 		if node.Source == "" {
 			node.Source = "manual"
 		}
+		if subID := subscriptionIDForProvider(node.Provider, subscriptions); subID != "" {
+			node.SubscriptionID = firstNonEmpty(node.SubscriptionID, subID)
+			node.Source = "subscription"
+		}
 		byID[node.ID] = node
 	}
 	for _, outbound := range legacy {
@@ -251,22 +260,26 @@ func normalizeOutboundNodes(nodes []OutboundNodeConfig, legacy []OutboundConfig)
 			continue
 		}
 		id := stableID("node", outbound.Name)
+		if _, ok := excluded[id]; ok {
+			continue
+		}
 		raw := outboundToRawConfig(outbound)
 		source := "manual"
 		if outbound.Subscription != "" {
 			source = "subscription"
 		}
 		next := OutboundNodeConfig{
-			ID:        id,
-			Name:      outbound.Name,
-			Type:      outbound.Protocol,
-			Region:    DetectNodeRegion(outbound.Name, outbound.Address),
-			Provider:  firstNonEmpty(outbound.Subscription, outbound.Group),
-			Address:   outbound.Address,
-			Port:      outbound.Port,
-			Enabled:   !outbound.Disabled,
-			Source:    source,
-			RawConfig: raw,
+			ID:             id,
+			Name:           outbound.Name,
+			Type:           outbound.Protocol,
+			Region:         DetectNodeRegion(outbound.Name, outbound.Address),
+			Provider:       firstNonEmpty(outbound.Subscription, outbound.Group),
+			Address:        outbound.Address,
+			Port:           outbound.Port,
+			Enabled:        !outbound.Disabled,
+			Source:         source,
+			SubscriptionID: subscriptionIDForProvider(outbound.Subscription, subscriptions),
+			RawConfig:      raw,
 		}
 		if existing, ok := byID[id]; ok {
 			next.Region = firstNonEmpty(existing.Region, next.Region)
@@ -281,6 +294,28 @@ func normalizeOutboundNodes(nodes []OutboundNodeConfig, legacy []OutboundConfig)
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out
+}
+
+func excludedNodeIDs(subscriptions []SubscriptionConfig) map[string]struct{} {
+	out := map[string]struct{}{}
+	for _, sub := range subscriptions {
+		for _, id := range sub.ExcludedNodeIDs {
+			id = strings.TrimSpace(id)
+			if id != "" {
+				out[id] = struct{}{}
+			}
+		}
+	}
+	return out
+}
+
+func subscriptionIDForProvider(provider string, subscriptions []SubscriptionConfig) string {
+	for _, sub := range subscriptions {
+		if provider == sub.ID || provider == sub.Name {
+			return sub.ID
+		}
+	}
+	return ""
 }
 
 func normalizeRegionGroups(groups []RegionGroupConfig, nodes []OutboundNodeConfig) []RegionGroupConfig {

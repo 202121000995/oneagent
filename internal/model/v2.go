@@ -25,13 +25,14 @@ type EntryConfig struct {
 }
 
 type SubscriptionConfig struct {
-	ID              string `yaml:"id" json:"id"`
-	Name            string `yaml:"name" json:"name"`
-	URL             string `yaml:"url" json:"url"`
-	Type            string `yaml:"type,omitempty" json:"type,omitempty"`
-	Enabled         bool   `yaml:"enabled" json:"enabled"`
-	RefreshInterval int    `yaml:"refresh_interval,omitempty" json:"refresh_interval,omitempty"`
-	LastUpdateAt    string `yaml:"last_update_at,omitempty" json:"last_update_at,omitempty"`
+	ID              string   `yaml:"id" json:"id"`
+	Name            string   `yaml:"name" json:"name"`
+	URL             string   `yaml:"url" json:"url"`
+	Type            string   `yaml:"type,omitempty" json:"type,omitempty"`
+	Enabled         bool     `yaml:"enabled" json:"enabled"`
+	RefreshInterval int      `yaml:"refresh_interval,omitempty" json:"refresh_interval,omitempty"`
+	LastUpdateAt    string   `yaml:"last_update_at,omitempty" json:"last_update_at,omitempty"`
+	ExcludedNodeIDs []string `yaml:"excluded_node_ids,omitempty" json:"excluded_node_ids,omitempty"`
 }
 
 type OutboundNodeConfig struct {

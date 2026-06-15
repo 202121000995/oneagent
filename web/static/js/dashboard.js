@@ -2208,7 +2208,9 @@ document.addEventListener("click", async (event) => {
 
   const testButton = event.target.closest("[data-test-type]");
   if (testButton) {
+    if (testButton.disabled) return;
     const originalText = testButton.textContent;
+    testButton.disabled = true;
     try {
       testButton.textContent = "测试中";
       const result = await postJSON(`/api/nodes/${encodeURIComponent(testButton.dataset.testType)}/${encodeURIComponent(testButton.dataset.testName)}/test`, {});
@@ -2221,6 +2223,8 @@ document.addEventListener("click", async (event) => {
       setTimeout(() => {
         testButton.textContent = originalText;
       }, 1200);
+    } finally {
+      testButton.disabled = false;
     }
     return;
   }

@@ -1,6 +1,7 @@
 package core
 
 import (
+	"context"
 	"database/sql"
 	"os"
 	"path/filepath"
@@ -31,7 +32,7 @@ func InitDatabase(path string) (*sql.DB, error) {
 		db.Close()
 		return nil, err
 	}
-	if _, err := db.Exec(repository.V2SchemaSQL); err != nil {
+	if err := repository.NewV2Repository(db).Migrate(context.Background()); err != nil {
 		db.Close()
 		return nil, err
 	}
