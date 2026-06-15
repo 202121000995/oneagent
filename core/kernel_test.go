@@ -211,6 +211,48 @@ func TestSingBoxRawProtocolConfigsPassThrough(t *testing.T) {
 	}
 }
 
+func TestSingBoxRawRealityOutboundDefaultsUTLS(t *testing.T) {
+	kernel := NewSingBoxKernel()
+	data, err := kernel.GenerateConfig(RuntimeState{Outbounds: []OutboundConfig{{
+		Name:     "node-reality",
+		Protocol: "vless",
+		RawConfig: map[string]any{
+			"type":        "vless",
+			"server":      "example.com",
+			"server_port": 443,
+			"uuid":        "bf000d23-0752-40b4-affe-68f7707a9661",
+			"tls": map[string]any{
+				"enabled":     true,
+				"server_name": "addons.mozilla.org",
+				"reality": map[string]any{
+					"enabled":    true,
+					"public_key": "pub",
+				},
+			},
+		},
+	}}})
+	if err != nil {
+		t.Fatalf("GenerateConfig returned error: %v", err)
+	}
+	var generated map[string]any
+	if err := json.Unmarshal(data, &generated); err != nil {
+		t.Fatalf("generated sing-box config is not json: %v", err)
+	}
+	var outbound map[string]any
+	for _, raw := range generated["outbounds"].([]any) {
+		item := raw.(map[string]any)
+		if item["tag"] == "node-reality" {
+			outbound = item
+			break
+		}
+	}
+	tls := outbound["tls"].(map[string]any)
+	utls := tls["utls"].(map[string]any)
+	if utls["fingerprint"] != "chrome" || utls["enabled"] != true {
+		t.Fatalf("expected raw reality outbound to default uTLS chrome, got %#v", outbound)
+	}
+}
+
 func TestNormalizeRoutingConfigRemovesLegacyBypassOverseasDirectRule(t *testing.T) {
 	routing := normalizeRoutingConfig(RoutingConfig{
 		Mode:   "rule",

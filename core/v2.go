@@ -519,6 +519,7 @@ func outboundToRawConfig(outbound OutboundConfig) map[string]any {
 			tls["insecure"] = true
 		}
 		if outbound.PublicKey != "" || outbound.Security == "reality" {
+			tls["utls"] = map[string]any{"enabled": true, "fingerprint": firstNonEmpty(outbound.Fingerprint, "chrome")}
 			reality := map[string]any{"enabled": true}
 			addOptionalAny(reality, "public_key", outbound.PublicKey)
 			addOptionalAny(reality, "short_id", outbound.ShortID)

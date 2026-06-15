@@ -123,3 +123,27 @@ func TestNormalizeV2ConfigRewritesLegacyRouteRefs(t *testing.T) {
 		t.Fatalf("expected v2 route rule to validate after ref normalization: %v", err)
 	}
 }
+
+func TestNormalizeV2ConfigAddsUTLSToRealityRawConfig(t *testing.T) {
+	cfg := NormalizeV2Config(Config{
+		Outbounds: []OutboundConfig{{
+			Name:       "Reality",
+			Protocol:   "vless",
+			Address:    "example.com",
+			Port:       443,
+			UUID:       "bf000d23-0752-40b4-affe-68f7707a9661",
+			Security:   "reality",
+			TLS:        true,
+			ServerName: "addons.mozilla.org",
+			PublicKey:  "pub",
+		}},
+	})
+	if len(cfg.Nodes) != 1 {
+		t.Fatalf("expected one v2 node, got %#v", cfg.Nodes)
+	}
+	tls := cfg.Nodes[0].RawConfig["tls"].(map[string]any)
+	utls := tls["utls"].(map[string]any)
+	if utls["fingerprint"] != "chrome" || utls["enabled"] != true {
+		t.Fatalf("expected v2 raw_config to include uTLS chrome, got %#v", cfg.Nodes[0].RawConfig)
+	}
+}

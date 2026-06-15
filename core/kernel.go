@@ -497,6 +497,7 @@ func singBoxOutbounds(outbounds []OutboundConfig) []map[string]any {
 			item := copyMap(outbound.RawConfig)
 			item["tag"] = firstNonEmpty(outbound.Name, stringValue(item["tag"]))
 			item["type"] = firstNonEmpty(stringValue(item["type"]), outbound.Protocol)
+			ensureSingBoxRealityUTLS(item)
 			items = append(items, item)
 			continue
 		}
@@ -637,6 +638,25 @@ func singBoxOutbounds(outbounds []OutboundConfig) []map[string]any {
 		items = append([]map[string]any{{"type": "direct", "tag": "direct"}}, items...)
 	}
 	return items
+}
+
+func ensureSingBoxRealityUTLS(item map[string]any) {
+	tls, ok := item["tls"].(map[string]any)
+	if !ok {
+		return
+	}
+	if _, ok := tls["reality"].(map[string]any); !ok {
+		return
+	}
+	utls, ok := tls["utls"].(map[string]any)
+	if !ok {
+		tls["utls"] = map[string]any{"enabled": true, "fingerprint": "chrome"}
+		return
+	}
+	utls["enabled"] = true
+	if stringValue(utls["fingerprint"]) == "" {
+		utls["fingerprint"] = "chrome"
+	}
 }
 
 func singBoxRules(routing RoutingConfig) []map[string]any {
