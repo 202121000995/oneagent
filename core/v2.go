@@ -60,7 +60,7 @@ func NormalizeV2Config(cfg Config) Config {
 	cfg.AppPolicyGroups = normalizeAppPolicyGroups(cfg.AppPolicyGroups, cfg.Nodes)
 	cfg.RuleSets = normalizeRuleSets(cfg.RuleSets)
 	cfg.RouteRules = normalizeRouteRules(cfg.RouteRules, cfg.Routing)
-	cfg.RouteRules = normalizeRouteRuleInboundRefs(cfg.RouteRules, cfg.Entries)
+	cfg.RouteRules = normalizeRouteRuleRefs(cfg.RouteRules, cfg.Entries, cfg.Nodes, cfg.RegionGroups, cfg.AppPolicyGroups)
 	return cfg
 }
 
@@ -389,41 +389,90 @@ func normalizeRouteRules(rules []RouteRuleConfig, legacy RoutingConfig) []RouteR
 	return append([]RouteRuleConfig(nil), defaultRouteRules...)
 }
 
-func normalizeRouteRuleInboundRefs(rules []RouteRuleConfig, entries []EntryConfig) []RouteRuleConfig {
-	if len(rules) == 0 || len(entries) == 0 {
+func normalizeRouteRuleRefs(rules []RouteRuleConfig, entries []EntryConfig, nodes []OutboundNodeConfig, groups []RegionGroupConfig, policies []AppPolicyGroupConfig) []RouteRuleConfig {
+	if len(rules) == 0 {
 		return rules
 	}
-	byID := map[string]string{}
-	byName := map[string]string{}
+	entryByID := map[string]string{}
+	entryByName := map[string]string{}
 	for _, entry := range entries {
 		if entry.ID != "" {
-			byID[entry.ID] = entry.ID
+			entryByID[entry.ID] = entry.ID
 		}
 		if entry.Name != "" && entry.ID != "" {
-			byName[entry.Name] = entry.ID
+			entryByName[entry.Name] = entry.ID
 		}
 	}
-	canonical := func(value string) string {
+	outboundByID := map[string]string{"direct": "direct", "block": "block"}
+	outboundByName := map[string]string{
+		"Direct": "direct",
+		"DIRECT": "direct",
+		"direct": "direct",
+		"Block":  "block",
+		"BLOCK":  "block",
+		"block":  "block",
+	}
+	for _, node := range nodes {
+		if node.ID != "" {
+			outboundByID[node.ID] = node.ID
+		}
+		if node.Name != "" && node.ID != "" {
+			outboundByName[node.Name] = node.ID
+		}
+	}
+	for _, group := range groups {
+		if group.ID != "" {
+			outboundByID[group.ID] = group.ID
+		}
+		if group.Name != "" && group.ID != "" {
+			outboundByName[group.Name] = group.ID
+		}
+	}
+	for _, policy := range policies {
+		if policy.ID != "" {
+			outboundByID[policy.ID] = policy.ID
+		}
+		if policy.Name != "" && policy.ID != "" {
+			outboundByName[policy.Name] = policy.ID
+		}
+	}
+	canonicalEntry := func(value string) string {
 		if value == "" {
 			return ""
 		}
-		if id, ok := byID[value]; ok {
+		if id, ok := entryByID[value]; ok {
 			return id
 		}
-		if id, ok := byName[value]; ok {
+		if id, ok := entryByName[value]; ok {
 			return id
 		}
-		if id, ok := byID[stableID("entry", value)]; ok {
+		if id, ok := entryByID[stableID("entry", value)]; ok {
+			return id
+		}
+		return value
+	}
+	canonicalOutbound := func(value string) string {
+		if value == "" {
+			return ""
+		}
+		if id, ok := outboundByID[value]; ok {
+			return id
+		}
+		if id, ok := outboundByName[value]; ok {
+			return id
+		}
+		if id, ok := outboundByID[stableID("node", value)]; ok {
 			return id
 		}
 		return value
 	}
 	out := append([]RouteRuleConfig(nil), rules...)
 	for i := range out {
-		out[i].Inbound = canonical(out[i].Inbound)
+		out[i].Inbound = canonicalEntry(out[i].Inbound)
 		if out[i].MatchType == "inbound" {
-			out[i].MatchValue = canonical(out[i].MatchValue)
+			out[i].MatchValue = canonicalEntry(out[i].MatchValue)
 		}
+		out[i].Outbound = canonicalOutbound(out[i].Outbound)
 	}
 	return out
 }

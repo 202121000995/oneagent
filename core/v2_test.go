@@ -88,7 +88,7 @@ func TestCompileV2RuntimeBuildsPolicyChain(t *testing.T) {
 	}
 }
 
-func TestNormalizeV2ConfigRewritesLegacyInboundRouteRefs(t *testing.T) {
+func TestNormalizeV2ConfigRewritesLegacyRouteRefs(t *testing.T) {
 	cfg := NormalizeV2Config(Config{
 		Entries: []EntryConfig{{
 			ID:      "entry-local-mixed",
@@ -104,7 +104,7 @@ func TestNormalizeV2ConfigRewritesLegacyInboundRouteRefs(t *testing.T) {
 			MatchType:  "inbound",
 			MatchValue: "Local-Mixed",
 			Inbound:    "Local-Mixed",
-			Outbound:   "policy-final",
+			Outbound:   "Direct",
 			Enabled:    true,
 			Order:      10,
 		}},
@@ -116,7 +116,10 @@ func TestNormalizeV2ConfigRewritesLegacyInboundRouteRefs(t *testing.T) {
 	if cfg.RouteRules[0].Inbound != "entry-local-mixed" || cfg.RouteRules[0].MatchValue != "entry-local-mixed" {
 		t.Fatalf("expected legacy inbound name to normalize to entry id, got %#v", cfg.RouteRules[0])
 	}
+	if cfg.RouteRules[0].Outbound != "direct" {
+		t.Fatalf("expected legacy Direct outbound to normalize to direct, got %#v", cfg.RouteRules[0])
+	}
 	if err := cfg.Validate(); err != nil {
-		t.Fatalf("expected v2 route rule to validate after inbound ref normalization: %v", err)
+		t.Fatalf("expected v2 route rule to validate after ref normalization: %v", err)
 	}
 }
