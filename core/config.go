@@ -233,6 +233,14 @@ func (c Config) Validate() error {
 		}
 		seenInbound[inbound.Name] = struct{}{}
 	}
+	for _, entry := range c.Entries {
+		if entry.ID != "" {
+			seenInbound[entry.ID] = struct{}{}
+		}
+		if entry.Name != "" {
+			seenInbound[entry.Name] = struct{}{}
+		}
+	}
 
 	seenOutbound := map[string]struct{}{}
 	for _, outbound := range c.Outbounds {

@@ -87,3 +87,36 @@ func TestCompileV2RuntimeBuildsPolicyChain(t *testing.T) {
 		t.Fatalf("expected first-match rule_set rules, got %#v", rules)
 	}
 }
+
+func TestNormalizeV2ConfigRewritesLegacyInboundRouteRefs(t *testing.T) {
+	cfg := NormalizeV2Config(Config{
+		Entries: []EntryConfig{{
+			ID:      "entry-local-mixed",
+			Name:    "Local-Mixed",
+			Type:    "mixed",
+			Listen:  "127.0.0.1",
+			Port:    1080,
+			Enabled: true,
+		}},
+		RouteRules: []RouteRuleConfig{{
+			ID:         "rule-local",
+			Name:       "Local-Mixed",
+			MatchType:  "inbound",
+			MatchValue: "Local-Mixed",
+			Inbound:    "Local-Mixed",
+			Outbound:   "policy-final",
+			Enabled:    true,
+			Order:      10,
+		}},
+	})
+	cfg.Server.WebPort = 8080
+	cfg.Server.AdminUser = "admin"
+	cfg.Server.AdminPass = "password123"
+
+	if cfg.RouteRules[0].Inbound != "entry-local-mixed" || cfg.RouteRules[0].MatchValue != "entry-local-mixed" {
+		t.Fatalf("expected legacy inbound name to normalize to entry id, got %#v", cfg.RouteRules[0])
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("expected v2 route rule to validate after inbound ref normalization: %v", err)
+	}
+}

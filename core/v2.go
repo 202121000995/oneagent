@@ -60,6 +60,7 @@ func NormalizeV2Config(cfg Config) Config {
 	cfg.AppPolicyGroups = normalizeAppPolicyGroups(cfg.AppPolicyGroups, cfg.Nodes)
 	cfg.RuleSets = normalizeRuleSets(cfg.RuleSets)
 	cfg.RouteRules = normalizeRouteRules(cfg.RouteRules, cfg.Routing)
+	cfg.RouteRules = normalizeRouteRuleInboundRefs(cfg.RouteRules, cfg.Entries)
 	return cfg
 }
 
@@ -386,6 +387,45 @@ func normalizeRouteRules(rules []RouteRuleConfig, legacy RoutingConfig) []RouteR
 		return out
 	}
 	return append([]RouteRuleConfig(nil), defaultRouteRules...)
+}
+
+func normalizeRouteRuleInboundRefs(rules []RouteRuleConfig, entries []EntryConfig) []RouteRuleConfig {
+	if len(rules) == 0 || len(entries) == 0 {
+		return rules
+	}
+	byID := map[string]string{}
+	byName := map[string]string{}
+	for _, entry := range entries {
+		if entry.ID != "" {
+			byID[entry.ID] = entry.ID
+		}
+		if entry.Name != "" && entry.ID != "" {
+			byName[entry.Name] = entry.ID
+		}
+	}
+	canonical := func(value string) string {
+		if value == "" {
+			return ""
+		}
+		if id, ok := byID[value]; ok {
+			return id
+		}
+		if id, ok := byName[value]; ok {
+			return id
+		}
+		if id, ok := byID[stableID("entry", value)]; ok {
+			return id
+		}
+		return value
+	}
+	out := append([]RouteRuleConfig(nil), rules...)
+	for i := range out {
+		out[i].Inbound = canonical(out[i].Inbound)
+		if out[i].MatchType == "inbound" {
+			out[i].MatchValue = canonical(out[i].MatchValue)
+		}
+	}
+	return out
 }
 
 func normalizeRuleSets(ruleSets []RuleSetConfig) []RuleSetConfig {
