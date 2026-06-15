@@ -1674,7 +1674,7 @@ func probeHTTPProxyInboundGoogle(inbound InboundConfig) Health {
 		},
 	}
 	start := time.Now()
-	resp, err := client.Get("http://www.gstatic.com/generate_204")
+	resp, err := client.Get("https://www.google.com/generate_204")
 	if err != nil {
 		return Health{Status: "offline", LastError: "Google 链路测试失败: " + compactError(err.Error()), UpdatedAt: now}
 	}

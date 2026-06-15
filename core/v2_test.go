@@ -75,6 +75,9 @@ func TestCompileV2RuntimeBuildsPolicyChain(t *testing.T) {
 	if tags["region-sg"]["type"] != "selector" || tags["policy-netflix"]["type"] != "selector" {
 		t.Fatalf("expected region and netflix selectors, got %#v %#v", tags["region-sg"], tags["policy-netflix"])
 	}
+	if tags["policy-manual"]["default"] != "region-sg" {
+		t.Fatalf("expected policy-manual to prefer populated region, got %#v", tags["policy-manual"])
+	}
 	route := generated["route"].(map[string]any)
 	if route["final"] != "policy-final" {
 		t.Fatalf("expected policy final route, got %#v", route)
@@ -85,6 +88,49 @@ func TestCompileV2RuntimeBuildsPolicyChain(t *testing.T) {
 	rules := route["rules"].([]any)
 	if rules[0].(map[string]any)["rule_set"] == nil {
 		t.Fatalf("expected first-match rule_set rules, got %#v", rules)
+	}
+}
+
+func TestCompileV2RuntimeAvoidsEmptyRegionDirectFallback(t *testing.T) {
+	cfg := NormalizeV2Config(Config{
+		Entries: []EntryConfig{{ID: "entry-local-mixed", Name: "Local-Mixed", Type: "mixed", Listen: "0.0.0.0", Port: 26666, Enabled: true}},
+		Nodes: []OutboundNodeConfig{{
+			ID:        "node-us-self",
+			Name:      "US self",
+			Type:      "vless",
+			Region:    "us",
+			Address:   "us.example.com",
+			Port:      443,
+			Enabled:   true,
+			RawConfig: map[string]any{"type": "vless", "server": "us.example.com", "server_port": 443, "uuid": "bf000d23-0752-40b4-affe-68f7707a9661"},
+		}},
+	})
+	state, err := CompileV2Runtime(cfg)
+	if err != nil {
+		t.Fatalf("CompileV2Runtime returned error: %v", err)
+	}
+	kernel := NewSingBoxKernel()
+	data, err := kernel.GenerateConfig(state)
+	if err != nil {
+		t.Fatalf("GenerateConfig returned error: %v", err)
+	}
+	var generated map[string]any
+	if err := json.Unmarshal(data, &generated); err != nil {
+		t.Fatalf("generated config is not JSON: %v", err)
+	}
+	tags := map[string]map[string]any{}
+	for _, raw := range generated["outbounds"].([]any) {
+		item := raw.(map[string]any)
+		tags[item["tag"].(string)] = item
+	}
+	if tags["region-hk-auto"]["outbounds"].([]any)[0] != "block" {
+		t.Fatalf("expected empty region to block instead of direct, got %#v", tags["region-hk-auto"])
+	}
+	if tags["policy-manual"]["default"] != "region-us" {
+		t.Fatalf("expected policy-manual to select populated US region, got %#v", tags["policy-manual"])
+	}
+	if tags["policy-final"]["default"] != "policy-manual" {
+		t.Fatalf("expected policy-final to keep policy-manual, got %#v", tags["policy-final"])
 	}
 }
 

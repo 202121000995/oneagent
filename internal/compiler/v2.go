@@ -56,6 +56,7 @@ type RoutingConfig struct {
 
 func Compile(input model.V2Model) (RuntimeState, error) {
 	nodeTags := enabledNodeTags(input.Nodes)
+	viability := newOutboundViability(input)
 	outbounds := make([]OutboundConfig, 0, len(input.Nodes)+len(input.RegionGroups)*2+len(input.AppPolicyGroups)+4)
 	for _, node := range input.Nodes {
 		if !node.Enabled {
@@ -70,7 +71,7 @@ func Compile(input model.V2Model) (RuntimeState, error) {
 		}
 		groupNodes := enabledGroupNodeIDs(group, input.Nodes)
 		if len(groupNodes) == 0 {
-			groupNodes = []string{"direct"}
+			groupNodes = []string{"block"}
 		}
 		autoTag := group.ID + "-auto"
 		outbounds = append(outbounds, OutboundConfig{
@@ -99,26 +100,28 @@ func Compile(input model.V2Model) (RuntimeState, error) {
 	outbounds = append(outbounds, OutboundConfig{
 		Name:              "policy-auto",
 		Protocol:          "urltest",
-		SelectorOutbounds: fallbackCandidates(nodeTags, []string{"direct"}),
+		SelectorOutbounds: fallbackCandidates(nodeTags, []string{"block"}),
 		URL:               model.DefaultSmartURL,
 		Interval:          model.DefaultSmartInterval,
 		Tolerance:         model.DefaultTolerance,
 	})
+	manualCandidates := policyManualCandidates(input.RegionGroups, input.Nodes)
 	outbounds = append(outbounds, OutboundConfig{
 		Name:              "policy-manual",
 		Protocol:          "selector",
-		SelectorOutbounds: policyManualCandidates(input.RegionGroups, input.Nodes),
-		Default:           firstAvailable("region-hk", policyManualCandidates(input.RegionGroups, input.Nodes)),
+		SelectorOutbounds: manualCandidates,
+		Default:           firstViableOutbound("region-hk", manualCandidates, viability),
 	})
 	for _, policy := range sortedPolicies(input.AppPolicyGroups) {
 		if !policy.Enabled || policy.ID == "policy-auto" || policy.ID == "policy-manual" {
 			continue
 		}
+		candidates := fallbackCandidates(policy.Candidates, []string{"block"})
 		outbounds = append(outbounds, OutboundConfig{
 			Name:              policy.ID,
 			Protocol:          "selector",
-			SelectorOutbounds: fallbackCandidates(policy.Candidates, []string{"direct", "block"}),
-			Default:           firstAvailable(policy.Selected, policy.Candidates),
+			SelectorOutbounds: candidates,
+			Default:           firstViableOutbound(policy.Selected, candidates, viability),
 		})
 	}
 
@@ -243,7 +246,68 @@ func policyManualCandidates(groups []model.RegionGroupConfig, nodes []model.Outb
 			out = append(out, node.ID)
 		}
 	}
-	return fallbackCandidates(uniqueStrings(out), []string{"direct"})
+	return fallbackCandidates(uniqueStrings(out), []string{"block"})
+}
+
+type outboundViability struct {
+	nodes       map[string]struct{}
+	groupNodes  map[string]int
+	hasAnyNodes bool
+}
+
+func newOutboundViability(input model.V2Model) outboundViability {
+	v := outboundViability{nodes: map[string]struct{}{}, groupNodes: map[string]int{}}
+	for _, node := range input.Nodes {
+		if !node.Enabled {
+			continue
+		}
+		v.nodes[node.ID] = struct{}{}
+		v.hasAnyNodes = true
+	}
+	for _, group := range input.RegionGroups {
+		if !group.Enabled {
+			continue
+		}
+		v.groupNodes[group.ID] = len(enabledGroupNodeIDs(group, input.Nodes))
+	}
+	return v
+}
+
+func firstViableOutbound(preferred string, candidates []string, viability outboundViability) string {
+	candidateSet := map[string]struct{}{}
+	for _, candidate := range candidates {
+		candidateSet[candidate] = struct{}{}
+	}
+	if _, ok := candidateSet[preferred]; ok && isViableOutbound(preferred, viability) {
+		return preferred
+	}
+	for _, candidate := range candidates {
+		if isViableOutbound(candidate, viability) {
+			return candidate
+		}
+	}
+	if _, ok := candidateSet["block"]; ok {
+		return "block"
+	}
+	if len(candidates) > 0 {
+		return candidates[0]
+	}
+	return "block"
+}
+
+func isViableOutbound(tag string, viability outboundViability) bool {
+	switch tag {
+	case "":
+		return false
+	case "direct", "block":
+		return true
+	case "policy-auto", "policy-manual":
+		return viability.hasAnyNodes
+	}
+	if _, ok := viability.nodes[tag]; ok {
+		return true
+	}
+	return viability.groupNodes[tag] > 0
 }
 
 func sortedPolicies(policies []model.AppPolicyGroupConfig) []model.AppPolicyGroupConfig {
