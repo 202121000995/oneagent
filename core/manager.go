@@ -2670,11 +2670,18 @@ func v2RouteRulesToRouting(rules []RouteRuleConfig) RoutingConfig {
 			routing.DefaultOutbound = firstNonEmpty(rule.Outbound, routing.DefaultOutbound)
 			continue
 		}
+		matchType := firstNonEmpty(rule.MatchType, "rule_set")
+		value := firstNonEmpty(rule.MatchValue, rule.RuleSet)
+		inbound := ""
+		if matchType == "inbound" {
+			inbound = firstNonEmpty(rule.Inbound, value)
+			value = inbound
+		}
 		routing.Rules = append(routing.Rules, RoutingRule{
 			Name:      firstNonEmpty(rule.ID, rule.Name),
-			MatchType: firstNonEmpty(rule.MatchType, "rule_set"),
-			Value:     firstNonEmpty(rule.MatchValue, rule.RuleSet),
-			Inbound:   rule.Inbound,
+			MatchType: matchType,
+			Value:     value,
+			Inbound:   inbound,
 			Outbound:  rule.Outbound,
 			Priority:  rule.Order,
 			Disabled:  !rule.Enabled,

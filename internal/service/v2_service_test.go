@@ -96,3 +96,30 @@ func TestDeleteSubscriptionRemovesItsNodes(t *testing.T) {
 		t.Fatalf("expected deleted subscription node to be removed from region, got %#v", output.RegionGroups)
 	}
 }
+
+func TestReplaceRouteRulesConvertsStaleInboundRuleSet(t *testing.T) {
+	svc := NewV2ModelService()
+	input := model.V2Model{
+		Entries: []model.EntryConfig{{ID: "entry-local-mixed", Name: "Local-Mixed", Type: "mixed", Enabled: true}},
+	}
+
+	output, err := svc.ReplaceRouteRules(input, []model.RouteRuleConfig{{
+		ID:        "rule-adblock",
+		Name:      "广告拦截",
+		MatchType: "inbound",
+		Inbound:   "adblock",
+		Outbound:  "policy-adblock",
+		Enabled:   true,
+		Order:     10,
+	}})
+	if err != nil {
+		t.Fatalf("ReplaceRouteRules returned error: %v", err)
+	}
+	if len(output.RouteRules) != 1 {
+		t.Fatalf("expected one route rule, got %#v", output.RouteRules)
+	}
+	rule := output.RouteRules[0]
+	if rule.MatchType != "rule_set" || rule.RuleSet != "adblock" || rule.Inbound != "" || rule.MatchValue != "" {
+		t.Fatalf("expected stale inbound rule to become rule_set, got %#v", rule)
+	}
+}

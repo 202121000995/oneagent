@@ -258,6 +258,7 @@ func (s V2ModelService) DeletePolicyGroup(m model.V2Model, id string) (model.V2M
 }
 
 func (s V2ModelService) UpsertRouteRule(m model.V2Model, rule model.RouteRuleConfig) (model.V2Model, model.RouteRuleConfig, error) {
+	rule = normalizeRouteRuleInput(m, rule)
 	if rule.ID == "" {
 		rule.ID = stableID("rule", firstNonEmpty(rule.Name, rule.MatchValue, rule.RuleSet, rule.Outbound))
 	}
@@ -284,6 +285,62 @@ func (s V2ModelService) UpsertRouteRule(m model.V2Model, rule model.RouteRuleCon
 		return m.RouteRules[i].Order < m.RouteRules[j].Order
 	})
 	return m, rule, nil
+}
+
+func normalizeRouteRuleInput(m model.V2Model, rule model.RouteRuleConfig) model.RouteRuleConfig {
+	rule.MatchType = strings.TrimSpace(rule.MatchType)
+	rule.MatchValue = strings.TrimSpace(rule.MatchValue)
+	rule.RuleSet = strings.TrimSpace(rule.RuleSet)
+	rule.Inbound = strings.TrimSpace(rule.Inbound)
+	if rule.MatchType == "" {
+		switch {
+		case rule.RuleSet != "":
+			rule.MatchType = "rule_set"
+		case rule.Inbound != "" && !entryExists(m.Entries, rule.Inbound):
+			rule.MatchType = "rule_set"
+			rule.RuleSet = rule.Inbound
+			rule.Inbound = ""
+		case rule.Inbound != "":
+			rule.MatchType = "inbound"
+		default:
+			rule.MatchType = "rule_set"
+		}
+	}
+	switch rule.MatchType {
+	case "rule_set":
+		rule.RuleSet = firstNonEmpty(rule.RuleSet, rule.MatchValue, rule.Inbound)
+		rule.MatchValue = ""
+		rule.Inbound = ""
+	case "inbound":
+		rule.Inbound = firstNonEmpty(rule.Inbound, rule.MatchValue, rule.RuleSet)
+		if rule.Inbound != "" && !entryExists(m.Entries, rule.Inbound) {
+			rule.MatchType = "rule_set"
+			rule.RuleSet = rule.Inbound
+			rule.MatchValue = ""
+			rule.Inbound = ""
+			return rule
+		}
+		rule.MatchValue = rule.Inbound
+		rule.RuleSet = ""
+	case "final":
+		rule.MatchValue = ""
+		rule.RuleSet = ""
+		rule.Inbound = ""
+	default:
+		rule.MatchValue = firstNonEmpty(rule.MatchValue, rule.RuleSet, rule.Inbound)
+		rule.RuleSet = ""
+		rule.Inbound = ""
+	}
+	return rule
+}
+
+func entryExists(entries []model.EntryConfig, id string) bool {
+	for _, entry := range entries {
+		if id == entry.ID || id == entry.Name {
+			return true
+		}
+	}
+	return false
 }
 
 func (s V2ModelService) ReplaceRouteRules(m model.V2Model, rules []model.RouteRuleConfig) (model.V2Model, error) {
