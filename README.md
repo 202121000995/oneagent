@@ -67,24 +67,10 @@ kernel:
 
 Agent 会生成 sing-box JSON 配置，执行 `sing-box check -c`，然后用 `sing-box run -c` 启动子进程。面板上的“重载内核”会重新生成配置并重启内核进程。
 
-## Mihomo 替换点
+当前原型内置的 sing-box 协议映射：
 
-如果本机已安装 mihomo，可以在 `config.yaml` 中设置：
-
-```yaml
-kernel:
-  type: "mihomo"
-  executable: "/usr/local/bin/mihomo"
-  config_path: "mihomo.generated.yaml"
-```
-
-Agent 会生成 mihomo YAML 配置，执行 `mihomo -t -f`，然后用 `mihomo -f` 启动子进程。
-
-当前原型内置的协议映射：
-
-- 本地入站会映射为 sing-box `mixed/socks/socks5/http/vless/vmess/trojan/anytls/shadowsocks` 或 mihomo `mixed-port`
+- 本地入站会映射为 sing-box `mixed/socks/socks5/http/vless/vmess/trojan/anytls/shadowsocks`
 - `socks/socks5/http/direct/vless/vmess/trojan/shadowsocks/ss/hysteria2/tuic/anytls/naive` 出站会生成 sing-box 节点
-- `socks/socks5/http/vless/vmess/trojan/shadowsocks/ss/hysteria2/tuic/anytls` 出站会生成 mihomo 节点
 - `socks/socks5/http` 入站和出站支持用户名、密码
 - VLESS/VMess 需要 `uuid`
 - Trojan 需要 `password`
@@ -108,27 +94,16 @@ outbounds:
     server_name: hk.node.example.com
 ```
 
-## Mihomo 订阅、代理组和规则
+## 订阅和 V2 策略组
 
 ```yaml
-mihomo:
-  providers:
-    - name: main
-      type: http
-      url: https://example.com/sub.yaml
-      interval: 3600
-      health_check_url: http://www.gstatic.com/generate_204
-      health_check_lazy: true
-  proxy_groups:
-    - name: Auto
-      type: url-test
-      use:
-        - main
-      url: http://www.gstatic.com/generate_204
-      interval: 300
-  rules:
-    - DOMAIN-SUFFIX,example.com,Auto
-    - MATCH,Auto
+subscriptions:
+  - id: sub-main
+    name: main
+    url: https://example.com/sub.yaml
+    type: auto
+    enabled: true
+    refresh_interval: 3600
 ```
 
 面板支持输入订阅 URL 后预览解析结果，包括节点数、代理组数、规则数和 provider 数。接口：
@@ -142,13 +117,13 @@ curl -X POST http://127.0.0.1:8080/api/subscription/preview \
 
 订阅预览支持：
 
-- Mihomo/Clash YAML 订阅
+- 订阅 YAML 内容
 - Base64 编码的 URI 节点列表
 - 常见 `ss://`、`vmess://`、`vless://`、`trojan://`、`hysteria2://` URI 行
 
 ## 导入节点
 
-Web 面板的“导入节点”可以直接粘贴分享链接、订阅正文、Clash/Mihomo YAML 列表、sing-box JSON 配置或 v2rayN/X-UI 导出的节点。导入接口：
+Web 面板的“导入节点”可以直接粘贴分享链接、订阅正文、订阅 YAML 列表、sing-box JSON 配置或 v2rayN/X-UI 导出的节点。导入接口：
 
 ```bash
 curl -X POST http://127.0.0.1:8080/api/outbounds/import \
@@ -161,7 +136,7 @@ curl -X POST http://127.0.0.1:8080/api/outbounds/import \
 
 - URI：`vless://`、`vmess://`、`ss://`、`trojan://`、`hysteria2://`、`hy2://`、`tuic://`、`anytls://`、`shadowtls://`、`naive+https://`、`naive+quic://`、`http2://`、`http3://`
 - Base64：整段 base64 订阅、base64 authority、VMess JSON、v2rayN JSON
-- YAML/JSON：Clash/Mihomo `proxies` 或代理列表、sing-box `outbounds`
+- YAML/JSON：订阅 `proxies` 或代理列表、sing-box `outbounds`
 
 ## 内核抽象
 
@@ -169,7 +144,6 @@ curl -X POST http://127.0.0.1:8080/api/outbounds/import \
 
 - `placeholder`：默认占位内核，用于原型运行和配置生成
 - `sing-box`：生成 JSON、校验配置、启动/重载/停止 sing-box 进程
-- `mihomo`：生成 YAML、校验配置、启动/重载/停止 mihomo 进程
 
 核心接口：
 
@@ -187,7 +161,7 @@ type Kernel interface {
 
 ## 节点管理 API
 
-- `GET /api/system/kernels`：检测 `sing-box` / `mihomo` 是否安装、路径和版本
+- `GET /api/system/kernels`：检测 `sing-box` 是否安装、路径和版本
 - `GET /api/system/service`：查看 systemd 支持情况、服务模板和安装命令
 - `POST /api/password/change`：修改当前管理员密码
 - `POST /api/subscription/preview`：拉取并解析订阅预览
@@ -198,7 +172,7 @@ type Kernel interface {
 - `POST /api/nodes/{type}/{name}/test`：测试节点连通性和延迟
 - `PATCH /api/nodes/{type}/{name}/enabled`：启用或停用节点
 - `PUT /api/kernel/config`：保存内核类型、可执行文件路径和配置输出路径
-- `PUT /api/mihomo/config`：保存 mihomo 订阅、代理组和规则
+- `PUT /api/subscriptions/config`：保存订阅源配置
 - `DELETE /api/nodes/{type}/{name}`：删除入站或出站
 - `POST /api/kernel/reload`：重载当前内核
 - `POST /api/kernel/stop`：停止当前内核
@@ -219,16 +193,14 @@ type Kernel interface {
 
 推荐方式：先在本机生成完整离线包，再上传到 VPS。VPS 不需要访问 GitHub。
 
-先把 Linux amd64 内核文件下载到项目的 `kernels/` 目录：
+先把 Linux amd64 sing-box 内核文件下载到项目的 `kernels/` 目录：
 
 - sing-box：`https://github.com/SagerNet/sing-box/releases/download/v1.13.13/sing-box-1.13.13-linux-amd64.tar.gz`
-- mihomo：`https://github.com/MetaCubeX/mihomo/releases/download/v1.19.27/mihomo-linux-amd64-v1.19.27.gz`
 
 目录放好后应类似：
 
 ```bash
 kernels/sing-box-1.13.13-linux-amd64.tar.gz
-kernels/mihomo-linux-amd64-v1.19.27.gz
 ```
 
 本机生成 Linux amd64 离线包。默认 VPS 面板端口是 `39080`，也可以自己指定：
@@ -260,17 +232,16 @@ unzip nodetools-agent-offline-linux-amd64.zip && cd nodetools-agent-offline && s
 - Agent：`/opt/nodetools-agent/nodetools-agent`
 - systemd：`/etc/systemd/system/nodetools-agent.service`
 - sing-box：`/usr/local/bin/sing-box`
-- mihomo：`/usr/local/bin/mihomo`
 
-离线包会自动从 `kernels/` 目录解析 `sing-box` / `mihomo` 发布文件。也可以显式指定 Linux 二进制或发布包路径：
+离线包会自动从 `kernels/` 目录解析 `sing-box` 发布文件。也可以显式指定 Linux 二进制或发布包路径：
 
 ```bash
-SING_BOX_BIN=/path/to/sing-box MIHOMO_BIN=/path/to/mihomo GO_BIN=/Users/apple/Library/Go/sdk/go1.26.3/bin/go ARCH=amd64 ./deploy/package-offline.sh
+SING_BOX_BIN=/path/to/sing-box GO_BIN=/Users/apple/Library/Go/sdk/go1.26.3/bin/go ARCH=amd64 ./deploy/package-offline.sh
 ```
 
-这里的 `sing-box` / `mihomo` 必须是 Linux 对应架构的二进制文件，不能用 macOS 本机版。
+这里的 `sing-box` 必须是 Linux 对应架构的二进制文件，不能用 macOS 本机版。
 
-默认必须同时带 `sing-box` 和 `mihomo` 才会生成 zip；缺内核时脚本会停止。临时调试纯 Agent 包才使用：
+默认必须带 `sing-box` 才会生成 zip；缺内核时脚本会停止。临时调试纯 Agent 包才使用：
 
 ```bash
 ALLOW_MISSING_KERNELS=1 GO_BIN=/Users/apple/Library/Go/sdk/go1.26.3/bin/go ARCH=amd64 ./deploy/package-offline.sh
@@ -297,7 +268,7 @@ sudo sh deploy/install-kernels.sh
 - 在线状态来自 TCP 连通性探测，不再固定显示 online。
 - 延迟来自节点测速接口。
 - 停用节点不会进入生成的内核配置。
-- 流量统计不再随机增长；未接入 sing-box/mihomo 统计 API 前只保留真实已有值。
+- 流量统计不再随机增长；未接入 sing-box 统计 API 前只保留真实已有值。
 - 订阅更新会拉取已保存 provider URL，并把解析到的节点导入出站节点池。
 
 ## 数据库

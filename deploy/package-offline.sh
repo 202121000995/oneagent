@@ -129,11 +129,7 @@ copy_kernel() {
     return 0
   fi
 
-  if [ "${name}" = "sing-box" ]; then
-    echo "未找到 ${name}。请下载 Linux ${ARCH} 版本到 ${KERNEL_SOURCE_DIR}/，或设置 SING_BOX_BIN=/path/to/sing-box。"
-  else
-    echo "未找到 ${name}。请下载 Linux ${ARCH} 版本到 ${KERNEL_SOURCE_DIR}/，或设置 MIHOMO_BIN=/path/to/mihomo。"
-  fi
+  echo "未找到 ${name}。请下载 Linux ${ARCH} 版本到 ${KERNEL_SOURCE_DIR}/，或设置 SING_BOX_BIN=/path/to/sing-box。"
   return 1
 }
 
@@ -182,9 +178,6 @@ find_kernel_source() {
     sing-box)
       find "${KERNEL_SOURCE_DIR}" -maxdepth 1 -type f \( -name "sing-box" -o -name "sing-box-*linux-${ARCH}*.tar.gz" -o -name "sing-box-*linux-${ARCH}*.tgz" \) | head -n 1
       ;;
-    mihomo)
-      find "${KERNEL_SOURCE_DIR}" -maxdepth 1 -type f \( -name "mihomo" -o -name "mihomo-linux-${ARCH}*.gz" \) | head -n 1
-      ;;
   esac
 }
 
@@ -200,10 +193,9 @@ is_linux_binary() {
 
 missing_kernels=0
 copy_kernel "sing-box" "${SING_BOX_BIN:-}" || missing_kernels=$((missing_kernels + 1))
-copy_kernel "mihomo" "${MIHOMO_BIN:-}" || missing_kernels=$((missing_kernels + 1))
 
 if [ "${missing_kernels}" -gt 0 ] && [ "${ALLOW_MISSING_KERNELS}" != "1" ]; then
-  echo "离线包要求内置 sing-box 和 mihomo。缺少内核时已停止打包。"
+  echo "离线包要求内置 sing-box。缺少内核时已停止打包。"
   echo "临时生成纯 Agent 包可设置 ALLOW_MISSING_KERNELS=1，但不推荐用于 VPS 测试。"
   exit 1
 fi

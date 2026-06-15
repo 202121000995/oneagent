@@ -1,0 +1,89 @@
+package core
+
+import (
+	"encoding/json"
+	"testing"
+)
+
+func TestNormalizeV2ConfigClassifiesLegacyNodes(t *testing.T) {
+	cfg := Config{
+		Inbounds: []InboundConfig{{Name: "main", Protocol: "socks", Listen: "0.0.0.0", Port: 1080}},
+		Outbounds: []OutboundConfig{
+			{Name: "新加坡 01", Protocol: "vless", Address: "sg.example.com", Port: 443, UUID: "bf000d23-0752-40b4-affe-68f7707a9661"},
+			{Name: "Tokyo 01", Protocol: "trojan", Address: "jp.example.com", Port: 443, Password: "secret"},
+		},
+	}
+
+	model := V2ModelFromConfig(NormalizeV2Config(cfg))
+	if len(model.Entries) != 1 || model.Entries[0].ID != "entry-main" {
+		t.Fatalf("expected legacy inbound to become entry, got %#v", model.Entries)
+	}
+	byID := map[string]OutboundNodeConfig{}
+	for _, node := range model.Nodes {
+		byID[node.ID] = node
+	}
+	if byID["node-01"].Region != "sg" {
+		t.Fatalf("expected singapore node classified as sg, got %#v", byID["node-01"])
+	}
+	if byID["node-tokyo01"].Region != "jp" {
+		t.Fatalf("expected Tokyo node classified as jp, got %#v", byID["node-tokyo01"])
+	}
+}
+
+func TestCompileV2RuntimeBuildsPolicyChain(t *testing.T) {
+	cfg := NormalizeV2Config(Config{
+		Entries: []EntryConfig{{ID: "entry-socks-main", Name: "主入口", Type: "socks", Listen: "0.0.0.0", Port: 1080, Enabled: true}},
+		Nodes: []OutboundNodeConfig{{
+			ID:      "node-sg-001",
+			Name:    "新加坡 01",
+			Type:    "vless",
+			Region:  "sg",
+			Address: "sg.example.com",
+			Port:    443,
+			Enabled: true,
+			RawConfig: map[string]any{
+				"type":        "vless",
+				"server":      "sg.example.com",
+				"server_port": 443,
+				"uuid":        "bf000d23-0752-40b4-affe-68f7707a9661",
+			},
+		}},
+	})
+
+	state, err := CompileV2Runtime(cfg)
+	if err != nil {
+		t.Fatalf("CompileV2Runtime returned error: %v", err)
+	}
+	kernel := NewSingBoxKernel()
+	data, err := kernel.GenerateConfig(state)
+	if err != nil {
+		t.Fatalf("GenerateConfig returned error: %v", err)
+	}
+	var generated map[string]any
+	if err := json.Unmarshal(data, &generated); err != nil {
+		t.Fatalf("generated config is not JSON: %v", err)
+	}
+	outbounds := generated["outbounds"].([]any)
+	tags := map[string]map[string]any{}
+	for _, raw := range outbounds {
+		item := raw.(map[string]any)
+		tags[item["tag"].(string)] = item
+	}
+	if tags["region-sg-auto"]["type"] != "urltest" {
+		t.Fatalf("expected region smart urltest, got %#v", tags["region-sg-auto"])
+	}
+	if tags["region-sg"]["type"] != "selector" || tags["policy-netflix"]["type"] != "selector" {
+		t.Fatalf("expected region and netflix selectors, got %#v %#v", tags["region-sg"], tags["policy-netflix"])
+	}
+	route := generated["route"].(map[string]any)
+	if route["final"] != "policy-final" {
+		t.Fatalf("expected policy final route, got %#v", route)
+	}
+	if len(route["rule_set"].([]any)) == 0 {
+		t.Fatalf("expected inline rule sets, got %#v", route)
+	}
+	rules := route["rules"].([]any)
+	if rules[0].(map[string]any)["rule_set"] == nil {
+		t.Fatalf("expected first-match rule_set rules, got %#v", rules)
+	}
+}

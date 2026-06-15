@@ -23,10 +23,10 @@ func TestAgentServiceInfoContainsUnitAndCommands(t *testing.T) {
 
 func TestDetectKernelsReturnsKnownKernelNames(t *testing.T) {
 	kernels := DetectKernels(Config{})
-	if len(kernels) != 2 {
-		t.Fatalf("expected two kernel probes, got %d", len(kernels))
+	if len(kernels) != 1 {
+		t.Fatalf("expected one kernel probe, got %d", len(kernels))
 	}
-	if kernels[0].Name != "sing-box" || kernels[1].Name != "mihomo" {
+	if kernels[0].Name != "sing-box" {
 		t.Fatalf("unexpected kernel probes: %#v", kernels)
 	}
 }

@@ -1,9 +1,10 @@
 const pageTitles = {
-  overview: "系统状态",
-  inbounds: "入站列表",
-  outbounds: "出站节点",
-  routing: "路由策略",
-  kernel: "内核管理",
+  overview: "仪表盘",
+  inbounds: "入口管理",
+  outbounds: "节点池",
+  policies: "策略组",
+  routing: "路由规则",
+  kernel: "DNS / 内核",
   subscriptions: "订阅管理",
   system: "系统服务",
   logs: "运行日志",
@@ -14,6 +15,7 @@ const state = {
   page: "overview",
   nodes: [],
   config: {},
+  v2Model: {},
   status: {},
   configLoaded: false,
   selected: {
@@ -34,6 +36,7 @@ const outboundProtocols = [
   "shadowtls",
   "socks5",
   "http",
+  "custom",
 ];
 
 const ssMethods = [
@@ -56,8 +59,8 @@ const routingMatchTypes = [
   ["domain_suffix", "域名后缀"],
   ["domain_keyword", "域名关键词"],
   ["ip_cidr", "IP/CIDR"],
-  ["geoip", "GeoIP（mihomo/规则集）"],
-  ["geosite", "Geosite（mihomo/规则集）"],
+  ["geoip", "GeoIP（规则集）"],
+  ["geosite", "Geosite（规则集）"],
   ["protocol", "协议"],
   ["port", "目标端口"],
 ];
@@ -144,6 +147,11 @@ const inboundSchemas = {
     ["server_name", "SNI / Server Name", "addons.mozilla.org"],
     ["reality_handshake_server", "握手目标", "addons.mozilla.org"],
     ["reality_handshake_port", "握手端口", "443", "number"],
+  ],
+  custom: [
+    ["listen", "监听地址", "", "select", ["", ...inboundListenOptions]],
+    ["custom_type", "sing-box type", "tun"],
+    ["protocol_config_json", "protocol_config JSON", "{\n  \"type\": \"tun\",\n  \"interface_name\": \"tun0\",\n  \"address\": [\"172.19.0.1/30\"],\n  \"auto_route\": true\n}", "textarea"],
   ],
 };
 
@@ -263,6 +271,13 @@ const outboundSchemas = {
     ["username", "用户名", ""],
     ["password", "密码", "", "password"],
   ],
+  custom: [
+    ["name", "名称", "Custom-Node"],
+    ["custom_type", "sing-box type", "wireguard"],
+    ["address", "服务器地址", ""],
+    ["port", "端口", "", "number"],
+    ["raw_config_json", "raw_config JSON", "{\n  \"type\": \"wireguard\",\n  \"server\": \"example.com\",\n  \"server_port\": 51820\n}", "textarea"],
+  ],
 };
 
 const formatBytes = (value) => {
@@ -280,6 +295,19 @@ const formatLatency = (node) => {
   if (node.latency_ms) return `${node.latency_ms} ms`;
   if (["offline", "error", "timeout"].includes(node.status)) return "timeout";
   return "--";
+};
+
+const nodeHint = (node) => {
+  const diagnosis = node.diagnosis || "";
+  const detail = node.last_error || node.diagnosis_hint || "";
+  if (!diagnosis && !detail) return "";
+  return [diagnosis, detail].filter(Boolean).join("：");
+};
+
+const statusBadgeClass = (node) => {
+  if (node.status === "online") return "badge";
+  if (node.status === "offline" || node.status === "error" || node.status === "timeout") return "badge badge-danger";
+  return "badge badge-muted";
 };
 
 const escapeHTML = (value) => String(value ?? "")
@@ -373,51 +401,324 @@ const fillForm = (form, values) => {
   }
 };
 
+const compactObject = (value) => Object.fromEntries(
+  Object.entries(value).filter(([, item]) => item !== "" && item !== undefined && item !== null && !(Array.isArray(item) && item.length === 0)),
+);
+
+const parseJSONField = (value, fieldName) => {
+  const text = String(value || "").trim();
+  if (!text) return {};
+  try {
+    const parsed = JSON.parse(text);
+    if (!parsed || Array.isArray(parsed) || typeof parsed !== "object") {
+      throw new Error("must be an object");
+    }
+    return parsed;
+  } catch (error) {
+    throw new Error(`${fieldName} 不是有效的 JSON 对象`);
+  }
+};
+
+const isKnownInboundProtocol = (protocol) => Boolean(inboundSchemas[protocol]) && protocol !== "custom";
+const isKnownOutboundProtocol = (protocol) => Boolean(outboundSchemas[protocol]) && protocol !== "custom";
+
+const tlsConfigFromForm = (data) => {
+  const tls = compactObject({
+    enabled: Boolean(data.tls || data.server_name || data.public_key || data.skip_cert_verify),
+    server_name: data.server_name || "",
+    insecure: Boolean(data.skip_cert_verify),
+  });
+  if (data.fingerprint) tls.utls = { enabled: true, fingerprint: data.fingerprint };
+  if (data.public_key || data.short_id) {
+    tls.reality = compactObject({ enabled: true, public_key: data.public_key || "", short_id: data.short_id || "" });
+  }
+  return tls.enabled || tls.server_name || tls.reality ? tls : null;
+};
+
+const transportConfigFromForm = (data) => {
+  if (!data.transport || data.transport === "tcp") return null;
+  const transport = compactObject({ type: data.transport, path: data.path || "" });
+  if (data.host) transport.headers = { Host: [data.host] };
+  return transport;
+};
+
+const entryProtocolConfigFromForm = (data) => {
+  const protocol = data.protocol || "mixed";
+  if (protocol === "custom") {
+    const config = parseJSONField(data.protocol_config_json, "protocol_config JSON");
+    if (!config.type && data.custom_type) config.type = data.custom_type;
+    return config;
+  }
+  const config = {};
+  if (["vless", "vmess"].includes(protocol)) {
+    config.users = [compactObject({ uuid: data.uuid || "", flow: data.flow || "", alter_id: data.alter_id || 0 })];
+  }
+  if (protocol === "trojan" || protocol === "anytls") {
+    config.users = [compactObject({ password: data.password || "" })];
+  }
+  if (protocol === "shadowsocks") {
+    config.method = data.method || "";
+    config.password = data.password || "";
+  }
+  if (protocol === "shadowtls") {
+    config.version = 3;
+    config.users = [compactObject({ name: data.username || data.name || "user", password: data.password || "" })];
+    config.handshake = compactObject({
+      server: data.reality_handshake_server || data.server_name || "",
+      server_port: data.reality_handshake_port || 443,
+    });
+  }
+  const tls = tlsConfigFromForm(data);
+  if (tls) {
+    if (data.security === "reality" || data.private_key) {
+      tls.reality = compactObject({
+        enabled: true,
+        handshake: compactObject({ server: data.reality_handshake_server || data.server_name || "", server_port: data.reality_handshake_port || 443 }),
+        private_key: data.private_key || "",
+        short_id: data.short_id ? data.short_id.split(",").map((item) => item.trim()).filter(Boolean) : [],
+      });
+    }
+    config.tls = tls;
+  }
+  const transport = transportConfigFromForm(data);
+  if (transport) config.transport = transport;
+  return compactObject(config);
+};
+
+const v2EntryPayloadFromForm = (data) => {
+  const type = data.protocol === "custom" ? (data.custom_type || "custom") : (data.protocol || "mixed");
+  return {
+    id: data.original_name || "",
+    name: data.name || data.original_name || "",
+    type,
+    listen: data.listen || "",
+    port: Number(data.port || 0),
+    enabled: data.enabled !== false,
+    sniff: true,
+    auth: {
+      enabled: Boolean(data.username || data.password),
+      username: data.username || "",
+      password: data.password || "",
+    },
+    protocol_config: entryProtocolConfigFromForm(data),
+  };
+};
+
+const outboundRawConfigFromForm = (data) => {
+  const protocol = data.protocol || "vless";
+  if (protocol === "custom") {
+    const raw = parseJSONField(data.raw_config_json, "raw_config JSON");
+    if (!raw.type && data.custom_type) raw.type = data.custom_type;
+    if (!raw.server && data.address) raw.server = data.address;
+    if (!raw.server_port && data.port) raw.server_port = Number(data.port || 0);
+    return raw;
+  }
+  const raw = compactObject({
+    type: protocol,
+    server: data.address || "",
+    server_port: Number(data.port || 0),
+    username: data.username || "",
+    uuid: data.uuid || "",
+    password: data.password || "",
+    method: data.method || "",
+    flow: data.flow || "",
+    network: data.network || "",
+  });
+  const tls = tlsConfigFromForm(data);
+  if (tls) raw.tls = tls;
+  const transport = transportConfigFromForm(data);
+  if (transport) raw.transport = transport;
+  return raw;
+};
+
+const v2NodePayloadFromForm = (data) => {
+  const raw = outboundRawConfigFromForm(data);
+  const type = data.protocol === "custom" ? (data.custom_type || raw.type || "custom") : (data.protocol || "vless");
+  return {
+    id: data.original_name || "",
+    name: data.name || data.original_name || "",
+    type,
+    region: data.region || "",
+    address: data.address || raw.server || "",
+    port: Number(data.port || raw.server_port || 0),
+    enabled: data.enabled !== false,
+    source: "manual",
+    raw_config: raw,
+  };
+};
+
 const setText = (id, value) => {
   const element = document.getElementById(id);
   if (element) element.textContent = value;
 };
 
-const getRules = () => state.config?.routing?.rules || [];
+const setResult = (element, value, type = "info") => {
+  if (!element) return;
+  element.classList.remove("result-working", "result-success", "result-error");
+  const text = String(value ?? "");
+  element.textContent = text;
+  element.hidden = text.trim() === "";
+  if (!element.hidden) {
+    element.classList.add(`result-${type}`);
+  }
+};
+
+const legacyHealthByName = (nodes = []) => {
+  const map = new Map();
+  nodes.forEach((node) => {
+    map.set(node.name, node);
+  });
+  return map;
+};
+
+const v2EntryNode = (entry, health) => {
+  const probe = health.get(entry.id) || health.get(entry.name) || {};
+  return {
+    name: entry.id,
+    display_name: entry.name || entry.id,
+    type: "inbound",
+    protocol: entry.type,
+    address: entry.listen || "0.0.0.0",
+    port: entry.port,
+    enabled: entry.enabled !== false,
+    status: probe.status || (entry.enabled === false ? "disabled" : "unknown"),
+    latency_ms: probe.latency_ms || 0,
+    last_error: probe.last_error || "",
+    diagnosis: probe.diagnosis || "",
+    diagnosis_hint: probe.diagnosis_hint || "",
+    upload_bytes: probe.upload_bytes || 0,
+    download_bytes: probe.download_bytes || 0,
+    updated_at: probe.updated_at || new Date().toISOString(),
+  };
+};
+
+const v2OutboundNode = (node, health) => {
+  const probe = health.get(node.id) || health.get(node.name) || {};
+  return {
+    name: node.id,
+    display_name: node.name || node.id,
+    type: "outbound",
+    protocol: node.type,
+    address: node.address || node.raw_config?.server || "",
+    port: node.port || node.raw_config?.server_port || 0,
+    region: node.region || "other",
+    enabled: node.enabled !== false,
+    status: probe.status || (node.enabled === false ? "disabled" : "unknown"),
+    latency_ms: probe.latency_ms || node.latency || 0,
+    last_error: probe.last_error || "",
+    diagnosis: probe.diagnosis || "",
+    diagnosis_hint: probe.diagnosis_hint || "",
+    upload_bytes: probe.upload_bytes || 0,
+    download_bytes: probe.download_bytes || 0,
+    updated_at: probe.updated_at || new Date().toISOString(),
+  };
+};
+
+const buildV2NodeRows = (model, legacyNodes) => {
+  const health = legacyHealthByName(legacyNodes);
+  return [
+    ...(model.entries || []).map((entry) => v2EntryNode(entry, health)),
+    ...(model.nodes || []).map((node) => v2OutboundNode(node, health)),
+  ];
+};
+
+const getRules = () => state.v2Model?.route_rules || [];
 const getOutbounds = () => state.nodes.filter((node) => node.type === "outbound");
 const getInbounds = () => state.nodes.filter((node) => node.type === "inbound");
-const getInboundConfig = (name) => (state.config?.inbounds || []).find((item) => item.name === name);
-const getOutboundConfig = (name) => (state.config?.outbounds || []).find((item) => item.name === name);
+const getInboundConfig = (id) => {
+  const entry = (state.v2Model?.entries || []).find((item) => item.id === id || item.name === id);
+  if (!entry) return null;
+  const protocol = isKnownInboundProtocol(entry.type) ? entry.type : "custom";
+  return {
+    ...entry.protocol_config,
+    original_name: entry.id,
+    name: entry.name,
+    protocol,
+    custom_type: entry.type,
+    protocol_config_json: JSON.stringify(entry.protocol_config || { type: entry.type }, null, 2),
+    listen: entry.listen,
+    port: entry.port,
+    username: entry.auth?.username || "",
+    password: entry.auth?.password || "",
+    enabled: entry.enabled !== false,
+  };
+};
+const getOutboundConfig = (id) => {
+  const node = (state.v2Model?.nodes || []).find((item) => item.id === id || item.name === id);
+  if (!node) return null;
+  const raw = node.raw_config || {};
+  const protocol = isKnownOutboundProtocol(node.type) ? node.type : "custom";
+  const tls = raw.tls || {};
+  const reality = tls.reality || {};
+  const transport = raw.transport || {};
+  return {
+    ...raw,
+    original_name: node.id,
+    name: node.name,
+    protocol,
+    custom_type: node.type || raw.type || "",
+    raw_config_json: JSON.stringify(raw, null, 2),
+    address: node.address || raw.server || "",
+    port: node.port || raw.server_port || "",
+    username: raw.username || "",
+    uuid: raw.uuid || "",
+    password: raw.password || "",
+    method: raw.method || "",
+    flow: raw.flow || "",
+    network: raw.network || "",
+    tls: Boolean(tls.enabled),
+    server_name: tls.server_name || "",
+    skip_cert_verify: Boolean(tls.insecure),
+    public_key: reality.public_key || "",
+    short_id: reality.short_id || "",
+    fingerprint: tls.utls?.fingerprint || "",
+    transport: transport.type || raw.network || "",
+    path: transport.path || "",
+    host: transport.headers?.Host?.[0] || "",
+  };
+};
 
 async function refresh() {
-  const [statusRes, nodeRes, configRes, kernelsRes, serviceRes, envRes, portsRes] = await Promise.all([
+  const [statusRes, nodeRes, configRes, v2Res, kernelsRes, serviceRes, envRes, portsRes, securityRes] = await Promise.all([
     fetch("/api/status"),
     fetch("/api/nodes"),
     fetch("/api/config"),
+    fetch("/api/v2/model"),
     fetch("/api/system/kernels"),
     fetch("/api/system/service"),
     fetch("/api/system/environment"),
     fetch("/api/system/ports"),
+    fetch("/api/security/status"),
   ]);
-  if ([statusRes, nodeRes, configRes, kernelsRes, serviceRes, envRes, portsRes].some((res) => res.status === 401)) {
+  if ([statusRes, nodeRes, configRes, v2Res, kernelsRes, serviceRes, envRes, portsRes, securityRes].some((res) => res.status === 401)) {
     location.href = "/login";
     return;
   }
 
   state.status = await statusRes.json();
   const nodePayload = await nodeRes.json();
-  state.nodes = nodePayload.nodes || [];
   state.config = await configRes.json();
+  state.v2Model = v2Res.ok ? await v2Res.json() : {};
+  state.nodes = buildV2NodeRows(state.v2Model, nodePayload.nodes || []);
   const { kernels } = await kernelsRes.json();
   const service = await serviceRes.json();
   const environment = await envRes.json();
   const ports = await portsRes.json();
+  const security = await securityRes.json();
 
   renderMetrics();
   renderInbounds();
   renderOutbounds();
+  renderPolicyGroups();
   renderSystem(kernels, service, environment, ports);
+  renderSecurity(security);
   renderOutboundOptions();
+  renderRoutingPreviewOptions();
 
   if (!state.configLoaded) {
     fillForm(document.getElementById("kernelForm"), state.config.kernel);
-    fillMihomoForm(state.config.mihomo || {});
-    fillRoutingForm(state.config.routing || {});
+    fillSubscriptionForm(state.v2Model.subscriptions || []);
+    fillRoutingForm({ mode: "rule", default_outbound: "policy-final", rules: state.v2Model.route_rules || [] });
     state.configLoaded = true;
   }
 
@@ -452,15 +753,16 @@ const renderInbounds = () => {
     return text.includes(query);
   });
   rows.innerHTML = items.map((node) => {
+    const hint = nodeHint(node);
     return `
       <tr>
-        <td>${escapeHTML(node.name)}</td>
+        <td><div class="node-name">${escapeHTML(node.display_name || node.name)}</div><div class="node-hint">${escapeHTML(node.name)}${hint ? ` / ${escapeHTML(hint)}` : ""}</div></td>
         <td>${escapeHTML(node.protocol)}</td>
         <td>${escapeHTML(node.address || "::")}:${node.port}</td>
         <td>${formatBytes(node.upload_bytes)}</td>
         <td>${formatBytes(node.download_bytes)}</td>
         <td>${formatLatency(node)}</td>
-        <td><span class="badge" title="${escapeHTML(node.last_error || "")}">${escapeHTML(node.status)}</span></td>
+        <td><span class="${statusBadgeClass(node)}" title="${escapeHTML(hint)}">${escapeHTML(node.status)}</span></td>
         <td>
           <div class="row-actions">
             <button class="icon-button" data-test-type="inbound" data-test-name="${escapeHTML(node.name)}" type="button">Google 测试</button>
@@ -484,20 +786,23 @@ const renderOutbounds = () => {
     const text = `${node.name} ${node.protocol} ${node.address}`.toLowerCase();
     return text.includes(query);
   });
-  rows.innerHTML = items.map((node) => `
+  rows.innerHTML = items.map((node) => {
+    const hint = nodeHint(node);
+    return `
     <tr>
-      <td>${escapeHTML(node.name)}</td>
+      <td><div class="node-name">${escapeHTML(node.display_name || node.name)}</div><div class="node-hint">${escapeHTML(node.name)}${hint ? ` / ${escapeHTML(hint)}` : ""}</div></td>
       <td>${escapeHTML(node.protocol)}</td>
       <td>${escapeHTML(node.address || "--")}</td>
       <td>${node.port || "--"}</td>
       <td>${formatBytes(node.upload_bytes)}</td>
       <td>${formatBytes(node.download_bytes)}</td>
       <td>${formatLatency(node)}</td>
-      <td><span class="badge" title="${escapeHTML(node.last_error || "")}">${escapeHTML(node.status)}</span></td>
+      <td><span class="${statusBadgeClass(node)}" title="${escapeHTML(hint)}">${escapeHTML(node.status)}</span></td>
       <td>
         <div class="row-actions">
           <button class="icon-button" data-test-type="outbound" data-test-name="${escapeHTML(node.name)}" type="button">连通测试</button>
           <button class="icon-button" data-edit-outbound="${escapeHTML(node.name)}" type="button">编辑</button>
+          <button class="icon-button" data-inspect-outbound="${escapeHTML(node.name)}" type="button">检查</button>
           <button class="icon-button" data-share-outbound="${escapeHTML(node.name)}" type="button">分享</button>
           <button class="icon-button" data-toggle-type="outbound" data-toggle-name="${escapeHTML(node.name)}" data-toggle-enabled="${node.enabled ? "false" : "true"}" type="button">${node.enabled ? "停用" : "启用"}</button>
           <button class="icon-button" data-delete-type="outbound" data-delete-name="${escapeHTML(node.name)}" type="button">删除</button>
@@ -505,7 +810,43 @@ const renderOutbounds = () => {
       </td>
       <td><input type="checkbox" data-node-check="outbound" value="${escapeHTML(node.name)}"${state.selected.outbound.has(node.name) ? " checked" : ""}></td>
     </tr>
-  `).join("") || `<tr><td colspan="10" class="empty-cell">还没有出站节点，可以导入链接或手动添加。</td></tr>`;
+  `;
+  }).join("") || `<tr><td colspan="10" class="empty-cell">还没有出站节点，可以导入链接或手动添加。</td></tr>`;
+};
+
+const renderPolicyGroups = () => {
+  const regionRows = document.getElementById("regionGroupRows");
+  const policyRows = document.getElementById("appPolicyRows");
+  const model = state.v2Model || {};
+  const regions = model.region_groups || [];
+  const policies = model.app_policy_groups || [];
+  if (regionRows) {
+    regionRows.innerHTML = regions.map((group) => {
+      const smart = group.smart || {};
+      const mode = group.mode === "manual" ? "手动" : "Smart";
+      const selected = group.mode === "manual" ? (group.selected_node_id || "--") : `${group.id}-auto`;
+      return `
+        <tr>
+          <td><div class="node-name">${escapeHTML(group.name || group.id)}</div><div class="node-hint">${escapeHTML(group.id)}</div></td>
+          <td><span class="badge">${escapeHTML(mode)}</span></td>
+          <td>${escapeHTML(selected)}</td>
+          <td>${(group.node_ids || []).length}</td>
+          <td>${escapeHTML(smart.url || "--")} / ${escapeHTML(smart.interval || "--")} / ${smart.tolerance || 0}ms</td>
+        </tr>
+      `;
+    }).join("") || `<tr><td colspan="5" class="empty-cell">还没有区域策略组。</td></tr>`;
+  }
+  if (policyRows) {
+    policyRows.innerHTML = policies.map((policy) => `
+      <tr>
+        <td><div class="node-name">${escapeHTML(policy.name || policy.id)}</div><div class="node-hint">${escapeHTML(policy.id)}</div></td>
+        <td>${escapeHTML(policy.selected || "--")}</td>
+        <td>${(policy.candidates || []).length}</td>
+        <td><span class="${policy.enabled ? "badge" : "badge badge-muted"}">${policy.enabled ? "启用" : "停用"}</span></td>
+      </tr>
+    `).join("") || `<tr><td colspan="4" class="empty-cell">还没有应用策略组。</td></tr>`;
+  }
+  setText("policyModelUpdated", new Date().toLocaleTimeString());
 };
 
 const refreshLogs = async () => {
@@ -524,14 +865,36 @@ const refreshLogs = async () => {
 };
 
 const renderOutboundOptions = () => {
-  const outbounds = getOutbounds();
   const defaultSelect = document.getElementById("defaultOutboundSelect");
   if (defaultSelect) {
-    const current = defaultSelect.value || state.config?.routing?.default_outbound || "direct";
-    defaultSelect.innerHTML = `<option value="direct">direct</option>` + outbounds
-      .map((node) => `<option value="${escapeHTML(node.name)}">${escapeHTML(node.name)} / ${escapeHTML(node.protocol)}</option>`)
+    const current = defaultSelect.value || "policy-final";
+    defaultSelect.innerHTML = [`<option value="direct">direct</option>`, `<option value="block">block</option>`].join("") + (state.v2Model?.app_policy_groups || [])
+      .map((policy) => `<option value="${escapeHTML(policy.id)}">${escapeHTML(policy.name || policy.id)}</option>`)
       .join("");
     defaultSelect.value = current;
+  }
+};
+
+const renderRoutingPreviewOptions = () => {
+  const inboundSelect = document.getElementById("routingPreviewInbound");
+  if (!inboundSelect) return;
+  const current = inboundSelect.value;
+  inboundSelect.innerHTML = getInbounds()
+    .map((node) => `<option value="${escapeHTML(node.name)}">${escapeHTML(node.name)} / ${escapeHTML(node.protocol)}</option>`)
+    .join("") || `<option value="">无入站</option>`;
+  if (current) inboundSelect.value = current;
+};
+
+const renderSecurity = (security) => {
+  setText("securityUser", security.username || "--");
+  setText("securityDefaultPassword", security.default_password ? "存在风险" : "未检测到");
+  setText("securitySessions", String(security.active_sessions ?? "--"));
+  setText("securityLoginLimit", `${security.login_failure_limit || 6} 次 / ${security.login_failure_window || "15 分钟"}`);
+  const warnings = document.getElementById("securityWarnings");
+  if (warnings) {
+    warnings.textContent = (security.warnings || []).length > 0
+      ? security.warnings.map((item) => `风险: ${item}`).join("\n")
+      : "未发现默认密码风险。仍建议定期更换强密码，并只在可信网络开放面板。";
   }
 };
 
@@ -676,16 +1039,22 @@ const renderSystem = (kernels, service, environment, ports) => {
   if (unit) unit.value = service.unit || "";
 };
 
-const fillMihomoForm = (mihomo) => {
-  const form = document.getElementById("mihomoForm");
+const fillSubscriptionForm = (subscriptions) => {
+  const form = document.getElementById("subscriptionForm");
   if (!form) return;
-  const provider = mihomo.providers?.[0] || {};
-  const group = mihomo.proxy_groups?.[0] || {};
+  const provider = subscriptions?.[0] || {};
   form.elements.provider_name.value = provider.name || "";
   form.elements.provider_url.value = provider.url || "";
-  form.elements.group_name.value = group.name || "NodeTools";
-  form.elements.group_type.value = group.type || "select";
-  form.elements.rules.value = (mihomo.rules || ["MATCH,NodeTools"]).join("\n");
+  form.elements.provider_interval.value = provider.refresh_interval || 3600;
+  form.elements.provider_group.value = "";
+  form.elements.rename_prefix.value = "";
+  form.elements.rename_suffix.value = "";
+  form.elements.dedup_strategy.value = "equivalent";
+  form.elements.preserve_user_fields.value = "true";
+  form.elements.health_check_url.value = "http://www.gstatic.com/generate_204";
+  form.elements.health_check_interval.value = 300;
+  form.elements.filter.value = "";
+  form.elements.exclude_filter.value = "";
 };
 
 const fillRoutingForm = (routing) => {
@@ -711,13 +1080,14 @@ const routingValuePlaceholder = (matchType) => ({
   port: "443",
 }[matchType] || "");
 
-const routingRuleValue = (rule) => rule.value || rule.inbound || "";
+const routingRuleValue = (rule) => rule.value || rule.match_value || rule.rule_set || rule.inbound || "";
 
 const routingRuleMatchType = (rule) => rule.match_type || (rule.inbound ? "inbound" : "domain_suffix");
 
 const routingOutboundOptionsHTML = (current = "") => [
   `<option value="direct"${current === "direct" ? " selected" : ""}>direct</option>`,
-  ...getOutbounds().map((node) => `<option value="${escapeHTML(node.name)}"${node.name === current ? " selected" : ""}>${escapeHTML(node.name)} / ${escapeHTML(node.protocol)}</option>`),
+  `<option value="block"${current === "block" ? " selected" : ""}>block</option>`,
+  ...(state.v2Model?.app_policy_groups || []).map((policy) => `<option value="${escapeHTML(policy.id)}"${policy.id === current ? " selected" : ""}>${escapeHTML(policy.name || policy.id)}</option>`),
 ].join("");
 
 const routingInboundOptionsHTML = (current = "") => getInbounds()
@@ -738,7 +1108,7 @@ const renderRoutingRules = (rules = []) => {
   rows.innerHTML = rules.map((rule, index) => {
     const matchType = routingRuleMatchType(rule);
     const value = routingRuleValue(rule);
-    const priority = rule.priority || (index + 1) * 10;
+    const priority = rule.order || rule.priority || (index + 1) * 10;
     return `
       <tr data-routing-rule>
         <td><input name="priority" type="number" min="1" value="${priority}"></td>
@@ -751,8 +1121,8 @@ const renderRoutingRules = (rules = []) => {
         <td><select name="outbound">${routingOutboundOptionsHTML(rule.outbound || "direct")}</select></td>
         <td>
           <select name="enabled">
-            <option value="true"${rule.disabled ? "" : " selected"}>启用</option>
-            <option value="false"${rule.disabled ? " selected" : ""}>停用</option>
+            <option value="true"${rule.enabled === false || rule.disabled ? "" : " selected"}>启用</option>
+            <option value="false"${rule.enabled === false || rule.disabled ? " selected" : ""}>停用</option>
           </select>
         </td>
         <td><button type="button" class="icon-button" data-delete-routing-rule>删除</button></td>
@@ -768,17 +1138,19 @@ const collectRoutingRules = () => Array.from(document.querySelectorAll("[data-ro
     const outbound = row.querySelector('[name="outbound"]')?.value || "direct";
     const priority = Number(row.querySelector('[name="priority"]')?.value || (index + 1) * 10);
     const rule = {
+      id: `rule-${matchType}-${index + 1}`,
       name: `${matchType}-${index + 1}`,
       match_type: matchType,
-      value,
+      match_value: matchType === "rule_set" ? "" : value,
+      rule_set: matchType === "rule_set" ? value : "",
       outbound,
-      priority,
-      disabled: row.querySelector('[name="enabled"]')?.value === "false",
+      order: priority,
+      enabled: row.querySelector('[name="enabled"]')?.value !== "false",
     };
     if (matchType === "inbound") rule.inbound = value;
     return rule;
   })
-  .filter((rule) => rule.value && rule.outbound);
+  .filter((rule) => (rule.match_value || rule.rule_set || rule.inbound) && rule.outbound);
 
 const addRoutingRule = (rule = {}) => {
   const preset = document.getElementById("routingPresetInput");
@@ -798,8 +1170,7 @@ const addRoutingRule = (rule = {}) => {
 const applyBypassChinaPreset = () => {
   const defaultSelect = document.getElementById("defaultOutboundSelect");
   if (defaultSelect?.value === "direct") {
-    const firstOutbound = getOutbounds()[0]?.name;
-    if (firstOutbound) defaultSelect.value = firstOutbound;
+    defaultSelect.value = "policy-final";
   }
   document.getElementById("routingModeSelect").value = "rule";
   document.getElementById("routingPresetInput").value = "bypass_cn";
@@ -832,57 +1203,66 @@ const updateRoutingModeUI = () => {
     hint.textContent = {
       direct: "全部直连：所有流量直接从 VPS 出口访问，不使用默认出站，分流规则不会生效。",
       global: "全局代理：所有流量都走默认出站，下面的分流规则不会生效。",
-      rule: "规则分流：先按下方规则匹配，未命中流量走默认出站。sing-box 1.12+ 不再支持旧 GeoIP/Geosite 字段，相关规则不会写入 sing-box，mihomo 可用。",
+      rule: "规则分流：先按下方规则匹配，未命中流量走默认出站。V2 推荐使用 sing-box rule_set 管理应用规则。",
     }[mode] || "";
   }
   if (globalMode) document.getElementById("routingPresetInput").value = "custom";
 };
 
-const mihomoPayloadFromForm = (form) => {
+const subscriptionPayloadFromForm = (form) => {
   const data = formToObject(form);
-  const provider = data.provider_name && data.provider_url ? [{
-    name: data.provider_name,
-    type: "http",
-    url: data.provider_url,
-    interval: 3600,
-    health_check_url: "http://www.gstatic.com/generate_204",
-    health_check_lazy: true,
-  }] : [];
-  const groupName = data.group_name || "NodeTools";
   return {
-    providers: provider,
-    proxy_groups: [{
-      name: groupName,
-      type: data.group_type || "select",
-      proxies: ["DIRECT"],
-      use: provider.map((item) => item.name),
-    }],
-    rules: String(data.rules || "MATCH," + groupName)
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .filter(Boolean),
+    id: state.v2Model?.subscriptions?.[0]?.id || "",
+    name: data.provider_name || "main",
+    type: "auto",
+    url: data.provider_url || "",
+    enabled: true,
+    refresh_interval: Number(data.provider_interval || 3600),
   };
 };
 
-const saveMihomoConfig = async () => {
-  const form = document.getElementById("mihomoForm");
+const saveSubscriptionConfig = async () => {
+  const form = document.getElementById("subscriptionForm");
   if (!form) return;
-  await sendJSON("/api/mihomo/config", "PUT", mihomoPayloadFromForm(form));
+  await sendJSON("/api/v2/subscriptions", "PUT", subscriptionPayloadFromForm(form));
   state.configLoaded = false;
 };
 
 const renderSubscriptionUpdateResult = (payload) => {
   const output = document.getElementById("subscriptionPreview");
   const lines = subscriptionResultLines(payload);
-  if (output) output.textContent = lines.join("\n") || "没有可更新的订阅";
+  setResult(output, lines.join("\n") || "没有可更新的订阅", "success");
 };
 
 const subscriptionResultLines = (payload) => (payload.results || []).flatMap((item) => [
   `订阅: ${item.provider || item.url}`,
-  `解析: ${item.parsed} / 导入: ${item.imported}`,
+  `解析: ${item.parsed} / 导入: ${item.imported} / 新增: ${item.added || 0} / 更新: ${item.updated || 0} / 未变化: ${item.unchanged || 0}`,
   `节点: ${(item.imported_nodes || []).slice(0, 20).join(", ") || "--"}`,
+  ...((item.warnings || []).slice(0, 10).map((warning) => `提示: ${warning}`)),
   ...((item.errors || []).map((error) => `错误: ${error}`)),
 ]);
+
+const importResultLines = (payload) => {
+  const lines = [
+    `解析节点: ${payload.parsed}`,
+    `导入节点: ${(payload.imported || []).length}`,
+    `新增: ${payload.added || 0} / 更新: ${payload.updated || 0} / 未变化: ${payload.unchanged || 0}`,
+  ];
+  const details = payload.details || [];
+  if (details.length > 0) {
+    lines.push("明细:");
+    lines.push(...details.slice(0, 30).map((item) => {
+      const preserved = item.preserved_name ? "，保留原名称" : "";
+      const warnings = (item.warnings || []).length ? `，提示: ${item.warnings.join("；")}` : "";
+      return `- ${item.action}: ${item.name} / ${item.protocol} / ${item.address}:${item.port}${preserved}${warnings}`;
+    }));
+  }
+  if ((payload.errors || []).length > 0) {
+    lines.push("部分错误:");
+    lines.push(...payload.errors.slice(0, 8));
+  }
+  return lines;
+};
 
 const showPage = (page) => {
   state.page = page;
@@ -980,14 +1360,17 @@ const fieldControl = ([name, label, placeholder, type = "text", options = []], v
 const renderOutboundProtocolOptions = () => {
   const select = document.getElementById("outboundProtocolSelect");
   if (!select) return;
-  select.innerHTML = outboundProtocols.map((protocol) => `<option value="${protocol}">${protocol}</option>`).join("");
+  select.innerHTML = outboundProtocols.map((protocol) => {
+    const label = protocol === "custom" ? "自定义 JSON" : protocol;
+    return `<option value="${protocol}">${label}</option>`;
+  }).join("");
 };
 
 const renderOutboundFields = (values = {}) => {
   const select = document.getElementById("outboundProtocolSelect");
   const container = document.getElementById("outboundDynamicFields");
   if (!select || !container) return;
-  const protocol = values.protocol || select.value || "vless";
+  const protocol = isKnownOutboundProtocol(values.protocol || select.value) ? (values.protocol || select.value) : ((values.protocol || select.value) === "custom" ? "custom" : "vless");
   select.value = protocol;
   container.innerHTML = (outboundSchemas[protocol] || outboundSchemas.vless).map((field) => fieldControl(field, values)).join("");
 };
@@ -1001,6 +1384,32 @@ const showShareLink = async (name, link) => {
   }
   openModal("shareModal");
   await navigator.clipboard?.writeText(link);
+};
+
+const inspectionLines = (inspection) => {
+  const lines = [
+    `节点: ${inspection.name}`,
+    `协议: ${inspection.protocol}`,
+  ];
+  if ((inspection.missing || []).length > 0) {
+    lines.push(`缺失字段: ${inspection.missing.join(", ")}`);
+  } else {
+    lines.push("缺失字段: 无");
+  }
+  if ((inspection.warnings || []).length > 0) {
+    lines.push(...inspection.warnings.map((warning) => `提示: ${warning}`));
+  }
+  lines.push("保存字段:");
+  Object.entries(inspection.saved || {}).forEach(([key, value]) => {
+    if (value) lines.push(`  ${key}: ${value}`);
+  });
+  if (inspection.raw) {
+    lines.push("原始链接解析字段:");
+    Object.entries(inspection.raw || {}).forEach(([key, value]) => {
+      if (value) lines.push(`  ${key}: ${value}`);
+    });
+  }
+  return lines;
 };
 
 const selectedBatchProtocols = (form) => [
@@ -1256,48 +1665,81 @@ document.getElementById("restartServiceButton")?.addEventListener("click", async
   }
 });
 
+const downloadSystemPackage = (url) => {
+  window.location.href = url;
+};
+
+document.getElementById("downloadBackupButton")?.addEventListener("click", () => {
+  downloadSystemPackage("/api/system/backup");
+});
+
+document.getElementById("downloadDiagnosticsButton")?.addEventListener("click", () => {
+  downloadSystemPackage("/api/system/diagnostics");
+});
+
+document.getElementById("restoreBackupForm")?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const output = document.getElementById("backupRestoreResult");
+  const file = form.elements.backup?.files?.[0];
+  if (!file) {
+    setResult(output, "请选择备份 zip 文件", "error");
+    return;
+  }
+  if (!confirm("确定恢复这个备份吗？当前配置会先自动备份。恢复数据库后建议重启 Agent。")) return;
+  const body = new FormData();
+  body.append("backup", file);
+  setResult(output, "恢复中...", "working");
+  try {
+    const response = await fetch("/api/system/restore", { method: "POST", body });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || "恢复失败");
+    setResult(output, [
+      payload.message || "恢复完成",
+      `恢复前备份: ${payload.backup_path || "--"}`,
+      `配置: ${payload.restored_config ? "已恢复" : "未包含"}`,
+      `数据库: ${payload.restored_database ? "已恢复" : "未包含"}`,
+      `证书: ${payload.restored_certs ? "已恢复" : "未包含"}`,
+    ].join("\n"), "success");
+    state.configLoaded = false;
+    await refresh();
+  } catch (error) {
+    setResult(output, error.message, "error");
+  }
+});
+
 document.getElementById("clearImportButton")?.addEventListener("click", () => {
   const text = document.getElementById("importLinksText");
   const result = document.getElementById("importResult");
   if (text) text.value = "";
-  if (result) result.textContent = "";
+  setResult(result, "");
 });
 
 document.getElementById("importOutboundsButton")?.addEventListener("click", async () => {
   const text = document.getElementById("importLinksText")?.value || "";
   const result = document.getElementById("importResult");
-  if (result) result.textContent = "解析中...";
+  setResult(result, "解析中...", "working");
   try {
-    const payload = await postJSON("/api/outbounds/import", { text });
-    const names = (payload.imported || []).map((node) => `${node.name} (${node.protocol})`);
-    const lines = [
-      `解析节点: ${payload.parsed}`,
-      `导入节点: ${(payload.imported || []).length}`,
-      `名称: ${names.join(", ") || "--"}`,
-    ];
-    if ((payload.errors || []).length > 0) {
-      lines.push("部分错误:");
-      lines.push(...payload.errors.slice(0, 8));
-    }
-    if (result) result.textContent = lines.join("\n");
+    const payload = await postJSON("/api/v2/nodes/import", { text });
+    setResult(result, `解析 ${payload.parsed || 0} 个，导入 ${(payload.nodes || []).length} 个节点`, "success");
     state.configLoaded = false;
     await refresh();
   } catch (error) {
-    if (result) result.textContent = error.message;
+    setResult(result, error.message, "error");
   }
 });
 
 document.getElementById("updateSubscriptionsButton")?.addEventListener("click", async () => {
   const result = document.getElementById("importResult");
-  if (result) result.textContent = "更新订阅中...";
+  setResult(result, "更新订阅中...", "working");
   try {
     const payload = await postJSON("/api/subscriptions/update", {});
     const lines = subscriptionResultLines(payload);
-    if (result) result.textContent = lines.join("\n") || "没有可更新的订阅";
+    setResult(result, lines.join("\n") || "没有可更新的订阅", "success");
     state.configLoaded = false;
     await refresh();
   } catch (error) {
-    if (result) result.textContent = error.message;
+    setResult(result, error.message, "error");
   }
 });
 
@@ -1337,11 +1779,8 @@ document.getElementById("inboundForm")?.addEventListener("submit", async (event)
   delete data.share_host;
   delete data.outbound;
   try {
-    if (editing) {
-      await sendJSON("/api/inbounds", "PUT", data);
-    } else {
-      await postJSON("/api/proxy/create", data);
-    }
+    data.original_name = editing ? form.elements.original_name.value : "";
+    await sendJSON("/api/v2/entries", "PUT", v2EntryPayloadFromForm(data));
     form.reset();
     closeModal();
     await refresh();
@@ -1356,7 +1795,7 @@ document.getElementById("batchInboundForm")?.addEventListener("submit", async (e
   const protocols = selectedBatchProtocols(form);
   const output = document.getElementById("batchInboundResult");
   if (protocols.length === 0) {
-    if (output) output.textContent = "请至少选择一个协议";
+    setResult(output, "请至少选择一个协议", "error");
     return;
   }
   const data = formToObject(form);
@@ -1371,15 +1810,15 @@ document.getElementById("batchInboundForm")?.addEventListener("submit", async (e
   try {
     for (let index = 0; index < protocols.length; index += 1) {
       const payload = await buildBatchInboundPayload(protocols[index], { ...base, port: base.port + index });
-      await postJSON("/api/proxy/create", payload);
+      await sendJSON("/api/v2/entries", "PUT", v2EntryPayloadFromForm(payload));
       lines.push(`${payload.name}: ${payload.protocol} / ${payload.listen}:${payload.port}`);
-      if (output) output.textContent = lines.join("\n");
+      setResult(output, lines.join("\n"), "working");
     }
     state.configLoaded = false;
     await refresh();
-    if (output) output.textContent = `${lines.join("\n")}\n\n批量搭建完成。可在入站列表逐个点击分享查看链接和二维码。`;
+    setResult(output, `${lines.join("\n")}\n\n批量搭建完成。可在入站列表逐个点击分享查看链接和二维码。`, "success");
   } catch (error) {
-    if (output) output.textContent = `${lines.join("\n")}\n错误: ${error.message}`;
+    setResult(output, `${lines.join("\n")}\n错误: ${error.message}`, "error");
   }
 });
 
@@ -1388,7 +1827,7 @@ document.getElementById("outboundForm")?.addEventListener("submit", async (event
   const form = event.currentTarget;
   const data = formToObject(form);
   try {
-    await sendJSON("/api/outbounds", "PUT", data);
+    await sendJSON("/api/v2/nodes", "PUT", v2NodePayloadFromForm(data));
     form.reset();
     renderOutboundFields();
     closeModal();
@@ -1403,7 +1842,6 @@ const applyKernelDefaults = (form) => {
   const type = form.elements.type?.value || "placeholder";
   const defaults = {
     "sing-box": ["/usr/local/bin/sing-box", "sing-box.generated.json"],
-    mihomo: ["/usr/local/bin/mihomo", "mihomo.generated.yaml"],
     placeholder: ["", "kernel.generated.json"],
   };
   const [executable, configPath] = defaults[type] || defaults.placeholder;
@@ -1426,12 +1864,12 @@ document.getElementById("kernelForm")?.addEventListener("submit", async (event) 
   }
 });
 
-document.getElementById("mihomoForm")?.addEventListener("submit", async (event) => {
+document.getElementById("subscriptionForm")?.addEventListener("submit", async (event) => {
   event.preventDefault();
   try {
-    await saveMihomoConfig();
+    await saveSubscriptionConfig();
     const output = document.getElementById("subscriptionPreview");
-    if (output) output.textContent = "订阅设置已保存。需要导入节点时点击“保存并拉取节点”。";
+    setResult(output, "订阅设置已保存。需要导入节点时点击“保存并拉取节点”。", "success");
     await refresh();
   } catch (error) {
     alert(error.message);
@@ -1440,31 +1878,26 @@ document.getElementById("mihomoForm")?.addEventListener("submit", async (event) 
 
 document.getElementById("saveAndUpdateSubscriptionButton")?.addEventListener("click", async () => {
   const output = document.getElementById("subscriptionPreview");
-  if (output) output.textContent = "保存并拉取节点中...";
+  setResult(output, "保存并拉取节点中...", "working");
   try {
-    await saveMihomoConfig();
+    await saveSubscriptionConfig();
     const payload = await postJSON("/api/subscriptions/update", {});
     renderSubscriptionUpdateResult(payload);
     await refresh();
     showPage("outbounds");
     const result = document.getElementById("importResult");
-    if (result) result.textContent = subscriptionResultLines(payload).join("\n") || "没有可更新的订阅";
+    setResult(result, subscriptionResultLines(payload).join("\n") || "没有可更新的订阅", "success");
   } catch (error) {
-    if (output) output.textContent = error.message;
+    setResult(output, error.message, "error");
   }
 });
 
 document.getElementById("routingForm")?.addEventListener("submit", async (event) => {
   event.preventDefault();
   const data = formToObject(event.currentTarget);
-  const payload = {
-    mode: data.mode || "rule",
-    preset: data.preset || "custom",
-    default_outbound: data.default_outbound || "direct",
-    rules: collectRoutingRules(),
-  };
+  const payload = { rules: collectRoutingRules() };
   try {
-    await sendJSON("/api/routing/config", "PUT", payload);
+    await sendJSON("/api/v2/route-rules/bulk", "PUT", payload);
     state.configLoaded = false;
     await refresh();
   } catch (error) {
@@ -1472,14 +1905,38 @@ document.getElementById("routingForm")?.addEventListener("submit", async (event)
   }
 });
 
+document.getElementById("previewRoutingButton")?.addEventListener("click", async () => {
+  const output = document.getElementById("routingPreviewOutput");
+  setResult(output, "预览中...", "working");
+  try {
+    const payload = await postJSON("/api/routing/preview", {
+      inbound: document.getElementById("routingPreviewInbound")?.value || "",
+      target: document.getElementById("routingPreviewTarget")?.value || "",
+      protocol: document.getElementById("routingPreviewProtocol")?.value || "tcp",
+      port: Number(document.getElementById("routingPreviewPort")?.value || 443),
+    });
+    if (output) {
+      setResult(output, [
+        `模式: ${payload.mode}`,
+        `最终出站: ${payload.outbound}`,
+        `原因: ${payload.reason}`,
+        payload.matched_rule ? `命中规则: ${payload.matched_rule} / ${payload.match_type}=${payload.value} / 优先级 ${payload.priority}` : "",
+        ...((payload.warnings || []).map((warning) => `提示: ${warning}`)),
+      ].filter(Boolean).join("\n"), "success");
+    }
+  } catch (error) {
+    setResult(output, error.message, "error");
+  }
+});
+
 document.getElementById("previewSubscriptionButton")?.addEventListener("click", async () => {
   const output = document.getElementById("subscriptionPreview");
-  const url = document.getElementById("mihomoForm")?.elements.provider_url.value || "";
-  if (output) output.textContent = "解析中...";
+  const url = document.getElementById("subscriptionForm")?.elements.provider_url.value || "";
+  setResult(output, "解析中...", "working");
   try {
     const preview = await postJSON("/api/subscription/preview", { url });
     if (output) {
-      output.textContent = [
+      setResult(output, [
         `格式: ${preview.format}`,
         `节点: ${preview.proxy_count}`,
         `代理组: ${preview.group_count}`,
@@ -1488,10 +1945,10 @@ document.getElementById("previewSubscriptionButton")?.addEventListener("click", 
         `节点名称: ${(preview.proxy_names || []).slice(0, 12).join(", ") || "--"}`,
         `代理组名称: ${(preview.group_names || []).join(", ") || "--"}`,
         ...(preview.warnings || []).map((item) => `提示: ${item}`),
-      ].join("\n");
+      ].join("\n"), "success");
     }
   } catch (error) {
-    if (output) output.textContent = error.message;
+    setResult(output, error.message, "error");
   }
 });
 
@@ -1516,6 +1973,21 @@ document.addEventListener("click", async (event) => {
   const editOutboundButton = event.target.closest("[data-edit-outbound]");
   if (editOutboundButton) {
     openOutboundEditor(editOutboundButton.dataset.editOutbound);
+    return;
+  }
+
+  const inspectOutboundButton = event.target.closest("[data-inspect-outbound]");
+  if (inspectOutboundButton) {
+    const output = document.getElementById("outboundDiagnostics");
+    setResult(output, "检查中...", "working");
+    try {
+      const response = await fetch(`/api/outbounds/${encodeURIComponent(inspectOutboundButton.dataset.inspectOutbound)}/inspect`);
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || "检查失败");
+      setResult(output, inspectionLines(payload).join("\n"), "success");
+    } catch (error) {
+      setResult(output, error.message, "error");
+    }
     return;
   }
 
@@ -1547,10 +2019,12 @@ document.addEventListener("click", async (event) => {
     try {
       testButton.textContent = "测试中";
       const result = await postJSON(`/api/nodes/${encodeURIComponent(testButton.dataset.testType)}/${encodeURIComponent(testButton.dataset.testName)}/test`, {});
-      if (result.error) testButton.textContent = "timeout";
+      testButton.textContent = result.status === "online" && result.latency_ms ? `${result.latency_ms} ms` : (result.diagnosis || "timeout");
+      testButton.title = [result.error, result.hint].filter(Boolean).join("\n");
       await refresh();
     } catch (error) {
       testButton.textContent = "timeout";
+      testButton.title = error.message;
       setTimeout(() => {
         testButton.textContent = originalText;
       }, 1200);
@@ -1561,11 +2035,15 @@ document.addEventListener("click", async (event) => {
   const toggleButton = event.target.closest("[data-toggle-type]");
   if (toggleButton) {
     try {
-      await sendJSON(
-        `/api/nodes/${encodeURIComponent(toggleButton.dataset.toggleType)}/${encodeURIComponent(toggleButton.dataset.toggleName)}/enabled`,
-        "PATCH",
-        { enabled: toggleButton.dataset.toggleEnabled === "true" },
-      );
+      const endpoint = toggleButton.dataset.toggleType === "outbound"
+        ? `/api/v2/nodes/${encodeURIComponent(toggleButton.dataset.toggleName)}/enabled`
+        : `/api/v2/entries`;
+      if (toggleButton.dataset.toggleType === "inbound") {
+        const entry = getInboundConfig(toggleButton.dataset.toggleName);
+        await sendJSON(endpoint, "PUT", v2EntryPayloadFromForm({ ...entry, original_name: toggleButton.dataset.toggleName, enabled: toggleButton.dataset.toggleEnabled === "true" }));
+      } else {
+        await sendJSON(endpoint, "PATCH", { enabled: toggleButton.dataset.toggleEnabled === "true" });
+      }
       state.configLoaded = false;
       await refresh();
     } catch (error) {
@@ -1577,7 +2055,10 @@ document.addEventListener("click", async (event) => {
   const button = event.target.closest("[data-delete-type]");
   if (!button) return;
   try {
-    await fetch(`/api/nodes/${encodeURIComponent(button.dataset.deleteType)}/${encodeURIComponent(button.dataset.deleteName)}`, {
+    const url = button.dataset.deleteType === "outbound"
+      ? `/api/v2/nodes/${encodeURIComponent(button.dataset.deleteName)}`
+      : `/api/v2/entries/${encodeURIComponent(button.dataset.deleteName)}`;
+    await fetch(url, {
       method: "DELETE",
     });
     state.configLoaded = false;

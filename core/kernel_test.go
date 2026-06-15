@@ -3,8 +3,6 @@ package core
 import (
 	"encoding/json"
 	"testing"
-
-	"gopkg.in/yaml.v3"
 )
 
 func TestSingBoxKernelGenerateConfig(t *testing.T) {
@@ -23,6 +21,9 @@ func TestSingBoxKernelGenerateConfig(t *testing.T) {
 			{Name: "remote", Protocol: "vless", Address: "127.0.0.1", Port: 2080, UUID: "bf000d23-0752-40b4-affe-68f7707a9661", Flow: "xtls-rprx-vision", Security: "reality", TLS: true, ServerName: "example.com", PublicKey: "reality-public-key", Transport: "tcp"},
 			{Name: "ss", Protocol: "shadowsocks", Address: "127.0.0.1", Port: 2081, Method: "aes-128-gcm", Password: "secret"},
 			{Name: "socks-auth", Protocol: "socks5", Address: "127.0.0.1", Port: 2082, Username: "user", Password: "pass"},
+			{Name: "hy2", Protocol: "hysteria2", Address: "127.0.0.1", Port: 2083, Password: "hy-pass", TLS: true, ServerName: "example.com", MPort: "2083,30000-30100", UpMbps: 100, DownMbps: 500},
+			{Name: "tuic", Protocol: "tuic", Address: "127.0.0.1", Port: 2084, UUID: "bf000d23-0752-40b4-affe-68f7707a9661", Password: "tuic-pass", TLS: true, ServerName: "example.com"},
+			{Name: "anytls", Protocol: "anytls", Address: "127.0.0.1", Port: 2085, Password: "any-pass", TLS: true, ServerName: "example.com", IdleSessionCheck: "30s", IdleSessionTimeout: "30s", MinIdleSession: 2},
 		},
 		Routing: RoutingConfig{
 			Mode:            "rule",
@@ -119,6 +120,22 @@ func TestSingBoxKernelGenerateConfig(t *testing.T) {
 	if socks["type"] != "socks" || socks["username"] != "user" || socks["password"] != "pass" {
 		t.Fatalf("expected authenticated socks outbound, got %#v", socks)
 	}
+	hy2 := outbounds[4].(map[string]any)
+	if hy2["server_ports"] == nil || hy2["up_mbps"] != float64(100) || hy2["down_mbps"] != float64(500) {
+		t.Fatalf("expected hysteria2 port hopping and bandwidth fields, got %#v", hy2)
+	}
+	serverPorts := hy2["server_ports"].([]any)
+	if serverPorts[1] != "30000:30100" {
+		t.Fatalf("expected sing-box port range format, got %#v", serverPorts)
+	}
+	tuic := outbounds[5].(map[string]any)
+	if tuic["congestion_control"] != "bbr" || tuic["udp_relay_mode"] != "native" {
+		t.Fatalf("expected tuic defaults, got %#v", tuic)
+	}
+	anytls := outbounds[6].(map[string]any)
+	if anytls["idle_session_check_interval"] != "30s" || anytls["min_idle_session"] != float64(2) {
+		t.Fatalf("expected anytls idle session fields, got %#v", anytls)
+	}
 	route := cfg["route"].(map[string]any)
 	if route["final"] != "ss" {
 		t.Fatalf("expected default outbound final ss, got %#v", route)
@@ -132,67 +149,65 @@ func TestSingBoxKernelGenerateConfig(t *testing.T) {
 	}
 }
 
-func TestMihomoKernelGenerateConfig(t *testing.T) {
-	kernel := NewMihomoKernel()
-	state := RuntimeState{
-		Inbounds:  []InboundConfig{{Name: "local", Protocol: "mixed", Port: 7890}},
-		Outbounds: []OutboundConfig{{Name: "remote", Protocol: "trojan", Address: "127.0.0.1", Port: 443, Password: "secret", TLS: true, ServerName: "example.com"}},
-		Mihomo: MihomoConfig{
-			Providers:   []ProxyProviderConfig{{Name: "sub", URL: "https://example.com/sub.yaml"}},
-			ProxyGroups: []ProxyGroupConfig{{Name: "Auto", Type: "url-test", Use: []string{"sub"}, URL: "http://www.gstatic.com/generate_204", Interval: 300}},
-			Rules:       []string{"DOMAIN-SUFFIX,example.com,Auto", "MATCH,DIRECT"},
-		},
-	}
-
-	data, err := kernel.GenerateConfig(state)
-	if err != nil {
-		t.Fatalf("GenerateConfig returned error: %v", err)
-	}
-
-	var cfg map[string]any
-	if err := yaml.Unmarshal(data, &cfg); err != nil {
-		t.Fatalf("generated mihomo config is not yaml: %v", err)
-	}
-	if cfg["mixed-port"] != 7890 {
-		t.Fatalf("expected mixed-port 7890, got %#v", cfg["mixed-port"])
-	}
-	if _, ok := cfg["proxy-providers"]; !ok {
-		t.Fatalf("expected proxy-providers in mihomo config")
-	}
-	groups := cfg["proxy-groups"].([]any)
-	if groups[0].(map[string]any)["name"] != "Auto" {
-		t.Fatalf("expected Auto proxy group, got %#v", groups[0])
-	}
-}
-
-func TestMihomoKernelGenerateSplitRules(t *testing.T) {
-	kernel := NewMihomoKernel()
-	state := RuntimeState{
-		Inbounds:  []InboundConfig{{Name: "local", Protocol: "mixed", Port: 7890}},
-		Outbounds: []OutboundConfig{{Name: "remote", Protocol: "trojan", Address: "127.0.0.1", Port: 443, Password: "secret", TLS: true, ServerName: "example.com"}},
-		Routing: RoutingConfig{
-			Mode:            "rule",
-			DefaultOutbound: "remote",
-			Rules: []RoutingRule{
-				{MatchType: "inbound", Value: "local", Inbound: "local", Outbound: "remote", Priority: 10},
-				{MatchType: "domain_suffix", Value: "example.com", Outbound: "direct", Priority: 20},
-				{MatchType: "geoip", Value: "cn", Outbound: "direct", Priority: 30},
+func TestSingBoxRawProtocolConfigsPassThrough(t *testing.T) {
+	cfg := Config{
+		Inbounds: []InboundConfig{{
+			Name:     "entry-tun",
+			Protocol: "custom-inbound",
+			ProtocolConfig: map[string]any{
+				"type":           "tun",
+				"interface_name": "tun0",
+				"address":        []string{"172.19.0.1/30"},
+				"auto_route":     true,
 			},
-		},
+		}},
+		Outbounds: []OutboundConfig{{
+			Name:     "node-wg",
+			Protocol: "custom-outbound",
+			RawConfig: map[string]any{
+				"type":        "wireguard",
+				"server":      "example.com",
+				"server_port": 51820,
+				"local_address": []string{
+					"10.0.0.2/32",
+				},
+			},
+		}},
+	}
+	cfg.Server.WebPort = 8080
+	cfg.Server.AdminUser = "admin"
+	cfg.Server.AdminPass = "password123"
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("raw sing-box protocol config should pass validation: %v", err)
 	}
 
-	data, err := kernel.GenerateConfig(state)
+	kernel := NewSingBoxKernel()
+	data, err := kernel.GenerateConfig(RuntimeState{Inbounds: cfg.Inbounds, Outbounds: cfg.Outbounds})
 	if err != nil {
 		t.Fatalf("GenerateConfig returned error: %v", err)
 	}
-
-	var cfg map[string]any
-	if err := yaml.Unmarshal(data, &cfg); err != nil {
-		t.Fatalf("generated mihomo config is not yaml: %v", err)
+	var generated map[string]any
+	if err := json.Unmarshal(data, &generated); err != nil {
+		t.Fatalf("generated sing-box config is not json: %v", err)
 	}
-	rules := cfg["rules"].([]any)
-	if rules[1] != "DOMAIN-SUFFIX,example.com,DIRECT" || rules[2] != "GEOIP,cn,DIRECT" || rules[len(rules)-1] != "MATCH,remote" {
-		t.Fatalf("expected mihomo split rules, got %#v", rules)
+	inbound := generated["inbounds"].([]any)[0].(map[string]any)
+	if inbound["type"] != "tun" || inbound["tag"] != "entry-tun" || inbound["interface_name"] != "tun0" {
+		t.Fatalf("expected raw tun inbound to pass through, got %#v", inbound)
+	}
+	if _, ok := inbound["listen_port"]; ok {
+		t.Fatalf("raw non-port inbound should not receive listen_port, got %#v", inbound)
+	}
+
+	var outbound map[string]any
+	for _, raw := range generated["outbounds"].([]any) {
+		item := raw.(map[string]any)
+		if item["tag"] == "node-wg" {
+			outbound = item
+			break
+		}
+	}
+	if outbound == nil || outbound["type"] != "wireguard" || outbound["server"] != "example.com" {
+		t.Fatalf("expected raw wireguard outbound to pass through, got %#v", outbound)
 	}
 }
 
@@ -216,8 +231,8 @@ func TestNormalizeKernelConfigSwitchesDefaults(t *testing.T) {
 		Executable: "/usr/local/bin/sing-box",
 		ConfigPath: "sing-box.generated.json",
 	})
-	if cfg.Executable != "/usr/local/bin/mihomo" || cfg.ConfigPath != "mihomo.generated.yaml" {
-		t.Fatalf("expected mihomo defaults, got %#v", cfg)
+	if cfg.Type != "sing-box" || cfg.Executable != "/usr/local/bin/sing-box" || cfg.ConfigPath != "sing-box.generated.json" {
+		t.Fatalf("expected legacy mihomo config to normalize to sing-box, got %#v", cfg)
 	}
 
 	cfg = normalizeKernelConfig(KernelConfig{

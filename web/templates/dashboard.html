@@ -4,22 +4,23 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>NodeTools Agent</title>
-  <link rel="stylesheet" href="/static/css/style.css?v=20260612-18">
+  <link rel="stylesheet" href="/static/css/style.css?v=20260615-v2">
 </head>
 <body>
   <div class="app-shell">
     <aside class="sidebar">
       <div class="brand">
         <span>NodeTools</span>
-        <strong>Agent V1</strong>
+        <strong>Agent V2</strong>
       </div>
       <nav class="side-nav" aria-label="主导航">
-        <button type="button" class="active" data-page-target="overview">系统状态</button>
-        <button type="button" data-page-target="inbounds">入站列表</button>
-        <button type="button" data-page-target="outbounds">出站节点</button>
-        <button type="button" data-page-target="routing">路由策略</button>
-        <button type="button" data-page-target="kernel">内核管理</button>
+        <button type="button" class="active" data-page-target="overview">仪表盘</button>
+        <button type="button" data-page-target="inbounds">入口管理</button>
         <button type="button" data-page-target="subscriptions">订阅管理</button>
+        <button type="button" data-page-target="outbounds">节点池</button>
+        <button type="button" data-page-target="policies">策略组</button>
+        <button type="button" data-page-target="routing">路由规则</button>
+        <button type="button" data-page-target="kernel">DNS / 内核</button>
         <button type="button" data-page-target="system">系统服务</button>
         <button type="button" data-page-target="logs">运行日志</button>
         <button type="button" data-page-target="security">安全设置</button>
@@ -125,7 +126,7 @@
           <div class="panel-header">
             <div>
               <h2>导入出站节点</h2>
-              <span>粘贴分享链接、订阅正文、Clash/Mihomo YAML、sing-box JSON 或 v2rayN/X-UI 节点</span>
+              <span>粘贴分享链接、订阅正文、订阅 YAML、sing-box JSON 或 v2rayN/X-UI 节点</span>
             </div>
             <div class="panel-actions">
               <button type="button" class="ghost-button" id="updateSubscriptionsButton">更新订阅</button>
@@ -174,6 +175,54 @@
                 </tr>
               </thead>
               <tbody id="outboundRows"></tbody>
+            </table>
+          </div>
+          <pre class="preview-box diagnostics-box" id="outboundDiagnostics">选择出站节点后点击“检查”，这里会显示导入字段、原始链接字段和缺失项。</pre>
+        </section>
+      </section>
+
+      <section class="page-view" data-page="policies">
+        <section class="panel">
+          <div class="panel-header">
+            <div>
+              <h2>区域策略组</h2>
+              <span>节点先进入区域组；Smart 会生成 urltest，手动模式会固定到指定节点</span>
+            </div>
+            <span id="policyModelUpdated">--</span>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>区域</th>
+                  <th>模式</th>
+                  <th>当前选择</th>
+                  <th>节点数</th>
+                  <th>Smart 设置</th>
+                </tr>
+              </thead>
+              <tbody id="regionGroupRows"></tbody>
+            </table>
+          </div>
+        </section>
+        <section class="panel">
+          <div class="panel-header">
+            <div>
+              <h2>应用策略组</h2>
+              <span>路由命中应用组后，再由这里选择区域组、自动组、手动组、Direct、Block 或具体节点</span>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>策略</th>
+                  <th>当前选择</th>
+                  <th>候选数</th>
+                  <th>状态</th>
+                </tr>
+              </thead>
+              <tbody id="appPolicyRows"></tbody>
             </table>
           </div>
         </section>
@@ -250,13 +299,30 @@
         <section class="panel">
           <div class="panel-header">
             <div>
+              <h2>备份、恢复和诊断</h2>
+              <span>备份包含配置、数据库和证书目录；诊断包会自动隐藏敏感字段</span>
+            </div>
+          </div>
+          <div class="button-row compact">
+            <button type="button" class="ghost-button" id="downloadBackupButton">导出备份包</button>
+            <button type="button" class="ghost-button" id="downloadDiagnosticsButton">导出诊断包</button>
+          </div>
+          <form class="form-panel inline-restore" id="restoreBackupForm">
+            <label>恢复备份 zip<input name="backup" type="file" accept=".zip,application/zip"></label>
+            <button type="submit">恢复备份</button>
+          </form>
+          <pre class="preview-box" id="backupRestoreResult"></pre>
+        </section>
+        <section class="panel">
+          <div class="panel-header">
+            <div>
               <h2>离线部署</h2>
               <span>先在本机打包，再上传到 VPS 安装；VPS 不需要访问 GitHub</span>
             </div>
           </div>
           <div class="deploy-output">
             <label>本机生成离线包<textarea rows="5" readonly>mkdir -p kernels
-# 先把 sing-box 和 mihomo 的 Linux amd64 发布文件放到 kernels/
+# 先把 sing-box 的 Linux amd64 发布文件放到 kernels/
 DEPLOY_WEB_PORT=39080 GO_BIN=/Users/apple/Library/Go/sdk/go1.26.3/bin/go ARCH=amd64 ./deploy/package-offline.sh</textarea></label>
             <label>VPS 解压后一条命令<textarea rows="6" readonly>unzip nodetools-agent-offline-linux-amd64.zip
 cd nodetools-agent-offline
@@ -275,7 +341,6 @@ sudo sh /opt/nodetools-agent/current/rollback-offline.sh</textarea></label>
               <select name="type">
                 <option value="placeholder">placeholder</option>
                 <option value="sing-box">sing-box</option>
-                <option value="mihomo">mihomo</option>
               </select>
             </label>
             <label>可执行文件<input name="executable" placeholder="/usr/local/bin/sing-box"></label>
@@ -287,20 +352,31 @@ sudo sh /opt/nodetools-agent/current/rollback-offline.sh</textarea></label>
 
       <section class="page-view" data-page="subscriptions">
         <section class="settings-grid">
-          <form class="panel form-panel" id="mihomoForm">
+          <form class="panel form-panel" id="subscriptionForm">
             <h2>订阅管理</h2>
             <label>订阅名称<input name="provider_name" placeholder="main"></label>
             <label>订阅 URL<input name="provider_url" placeholder="https://example.com/sub.yaml"></label>
-            <label>代理组名称<input name="group_name" value="NodeTools"></label>
-            <label>代理组类型
-              <select name="group_type">
-                <option value="select">select</option>
-                <option value="url-test">url-test</option>
-                <option value="fallback">fallback</option>
-                <option value="load-balance">load-balance</option>
+            <label>更新间隔（秒）<input name="provider_interval" type="number" min="60" value="3600"></label>
+            <label>订阅分组<input name="provider_group" placeholder="机场 / 地区 / 用途"></label>
+            <label>节点名前缀<input name="rename_prefix" placeholder="例如 JP-"></label>
+            <label>节点名后缀<input name="rename_suffix" placeholder="例如 -订阅"></label>
+            <label>去重策略
+              <select name="dedup_strategy">
+                <option value="equivalent">按节点参数</option>
+                <option value="name">按节点名称</option>
+                <option value="none">不去重</option>
               </select>
             </label>
-            <label>规则<textarea name="rules" rows="4">MATCH,NodeTools</textarea></label>
+            <label>保留手动字段
+              <select name="preserve_user_fields">
+                <option value="true">保留</option>
+                <option value="false">覆盖</option>
+              </select>
+            </label>
+            <label>健康检查 URL<input name="health_check_url" value="http://www.gstatic.com/generate_204"></label>
+            <label>健康检查间隔（秒）<input name="health_check_interval" type="number" min="60" value="300"></label>
+            <label>节点筛选<input name="filter" placeholder="正则，留空不过滤"></label>
+            <label>节点排除<input name="exclude_filter" placeholder="正则，留空不排除"></label>
             <div class="button-row compact">
               <button type="button" class="ghost-button" id="previewSubscriptionButton">预览订阅</button>
               <button type="button" class="ghost-button" id="saveAndUpdateSubscriptionButton">保存并拉取节点</button>
@@ -341,6 +417,25 @@ sudo sh /opt/nodetools-agent/current/rollback-offline.sh</textarea></label>
             </label>
             </div>
             <p class="routing-hint" id="routingModeHint"></p>
+            <div class="routing-preview">
+              <label>测试入站
+                <select id="routingPreviewInbound"></select>
+              </label>
+              <label>目标域名/IP
+                <input id="routingPreviewTarget" value="www.google.com" placeholder="www.google.com 或 8.8.8.8">
+              </label>
+              <label>协议
+                <select id="routingPreviewProtocol">
+                  <option value="tcp">tcp</option>
+                  <option value="udp">udp</option>
+                </select>
+              </label>
+              <label>端口
+                <input id="routingPreviewPort" type="number" min="1" max="65535" value="443">
+              </label>
+              <button type="button" class="ghost-button" id="previewRoutingButton">预览命中</button>
+              <pre class="preview-box" id="routingPreviewOutput">输入目标后点击预览，查看最终会走 direct 还是某个出站节点。</pre>
+            </div>
             <div class="table-wrap" id="routingRulesPanel">
               <table>
                 <thead>
@@ -362,6 +457,16 @@ sudo sh /opt/nodetools-agent/current/rollback-offline.sh</textarea></label>
 
       <section class="page-view" data-page="security">
         <section class="settings-grid">
+          <section class="panel form-panel">
+            <h2>安全状态</h2>
+            <dl class="service-facts">
+              <div><dt>账号</dt><dd id="securityUser">--</dd></div>
+              <div><dt>默认密码</dt><dd id="securityDefaultPassword">--</dd></div>
+              <div><dt>活跃会话</dt><dd id="securitySessions">--</dd></div>
+              <div><dt>登录保护</dt><dd id="securityLoginLimit">--</dd></div>
+            </dl>
+            <pre class="preview-box" id="securityWarnings">加载中...</pre>
+          </section>
           <form class="panel form-panel" id="passwordForm">
             <h2>修改密码</h2>
             <label>用户名<input name="username" value="admin" autocomplete="username"></label>
@@ -411,6 +516,8 @@ sudo sh /opt/nodetools-agent/current/rollback-offline.sh</textarea></label>
           <label>协议
             <select name="protocol" id="inboundProtocolSelect">
               <option value="mixed">mixed</option>
+              <option value="socks">socks</option>
+              <option value="socks5">socks5</option>
               <option value="http">http</option>
               <option value="shadowsocks">shadowsocks</option>
               <option value="vless">vless</option>
@@ -418,6 +525,7 @@ sudo sh /opt/nodetools-agent/current/rollback-offline.sh</textarea></label>
               <option value="trojan">trojan</option>
               <option value="shadowtls">shadowtls</option>
               <option value="anytls">anytls</option>
+              <option value="custom">自定义 JSON</option>
             </select>
           </label>
           <label>监听端口<input name="port" type="number" min="1" max="65535" placeholder="1080"></label>
@@ -502,6 +610,6 @@ sudo sh /opt/nodetools-agent/current/rollback-offline.sh</textarea></label>
     </section>
   </div>
 
-  <script src="/static/js/dashboard.js?v=20260612-18"></script>
+  <script src="/static/js/dashboard.js?v=20260612-20"></script>
 </body>
 </html>

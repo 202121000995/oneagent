@@ -40,7 +40,6 @@ func TestOfflinePackageScriptEmbedsVersionAndKernels(t *testing.T) {
 		"VERSION",
 		"rollback-offline.sh",
 		"copy_kernel \"sing-box\"",
-		"copy_kernel \"mihomo\"",
 		"ALLOW_MISSING_KERNELS",
 	} {
 		if !strings.Contains(script, expected) {

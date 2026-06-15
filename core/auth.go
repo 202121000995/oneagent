@@ -20,12 +20,14 @@ type Auth struct {
 
 	mu       sync.RWMutex
 	sessions map[string]time.Time
+	failures map[string][]time.Time
 }
 
 func NewAuth(db *sql.DB) *Auth {
 	return &Auth{
 		db:       db,
 		sessions: map[string]time.Time{},
+		failures: map[string][]time.Time{},
 	}
 }
 
@@ -77,9 +79,14 @@ func (a *Auth) Refresh(user, password string) {
 }
 
 func (a *Auth) Login(w http.ResponseWriter, user, password string) bool {
-	if !a.verifyPassword(user, password) {
+	if a.loginBlocked(user) {
 		return false
 	}
+	if !a.verifyPassword(user, password) {
+		a.recordFailure(user)
+		return false
+	}
+	a.clearFailures(user)
 
 	token := make([]byte, 32)
 	if _, err := rand.Read(token); err != nil {
@@ -101,6 +108,41 @@ func (a *Auth) Login(w http.ResponseWriter, user, password string) bool {
 		Expires:  expires,
 	})
 	return true
+}
+
+type SecurityStatus struct {
+	Username           string   `json:"username"`
+	DefaultPassword    bool     `json:"default_password"`
+	EmptyBootstrapPass bool     `json:"empty_bootstrap_pass"`
+	SessionHours       int      `json:"session_hours"`
+	LoginFailureLimit  int      `json:"login_failure_limit"`
+	LoginFailureWindow string   `json:"login_failure_window"`
+	ActiveSessions     int      `json:"active_sessions"`
+	Warnings           []string `json:"warnings,omitempty"`
+}
+
+func (a *Auth) SecurityStatus(username string, cfg Config) SecurityStatus {
+	if username == "" {
+		username = "admin"
+	}
+	status := SecurityStatus{
+		Username:           username,
+		DefaultPassword:    a.passwordMatches(username, "password123"),
+		EmptyBootstrapPass: cfg.Server.AdminPass == "",
+		SessionHours:       12,
+		LoginFailureLimit:  6,
+		LoginFailureWindow: "15 分钟",
+	}
+	a.mu.RLock()
+	status.ActiveSessions = len(a.sessions)
+	a.mu.RUnlock()
+	if status.DefaultPassword {
+		status.Warnings = append(status.Warnings, "当前账号仍可能使用默认密码 password123，请立即修改。")
+	}
+	if status.EmptyBootstrapPass {
+		status.Warnings = append(status.Warnings, "配置文件中的 admin_pass 为空；首次安装或迁移时不应依赖空密码。")
+	}
+	return status
 }
 
 func (a *Auth) ChangePassword(username, currentPassword, nextPassword string) error {
@@ -187,6 +229,57 @@ func (a *Auth) verifyPassword(username, password string) bool {
 		_, _ = a.db.Exec(`UPDATE users SET password = ? WHERE username = ?`, hash, username)
 	}
 	return true
+}
+
+func (a *Auth) passwordMatches(username, password string) bool {
+	var stored string
+	err := a.db.QueryRow(`SELECT password FROM users WHERE username = ?`, username).Scan(&stored)
+	if err != nil {
+		return false
+	}
+	if isBcryptHash(stored) {
+		return bcrypt.CompareHashAndPassword([]byte(stored), []byte(password)) == nil
+	}
+	return stored == password
+}
+
+func (a *Auth) loginBlocked(username string) bool {
+	username = strings.TrimSpace(username)
+	if username == "" {
+		username = "admin"
+	}
+	cutoff := time.Now().Add(-15 * time.Minute)
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	failures := a.failures[username]
+	next := failures[:0]
+	for _, item := range failures {
+		if item.After(cutoff) {
+			next = append(next, item)
+		}
+	}
+	a.failures[username] = next
+	return len(next) >= 6
+}
+
+func (a *Auth) recordFailure(username string) {
+	username = strings.TrimSpace(username)
+	if username == "" {
+		username = "admin"
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.failures[username] = append(a.failures[username], time.Now())
+}
+
+func (a *Auth) clearFailures(username string) {
+	username = strings.TrimSpace(username)
+	if username == "" {
+		username = "admin"
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	delete(a.failures, username)
 }
 
 func (a *Auth) clearSessions() {

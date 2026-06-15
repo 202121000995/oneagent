@@ -158,7 +158,6 @@ install_kernel() {
 }
 
 install_kernel "sing-box"
-install_kernel "mihomo"
 
 cat > "${SERVICE_PATH}" <<EOF
 [Unit]

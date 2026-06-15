@@ -71,6 +71,10 @@ type BatchNodeItem struct {
 	Name string `json:"name"`
 }
 
+type V2RouteRulesRequest struct {
+	Rules []RouteRuleConfig `json:"rules"`
+}
+
 func RegisterAPI(mux *http.ServeMux, manager *Manager, auth *Auth) {
 	mux.HandleFunc("POST /api/login", func(w http.ResponseWriter, r *http.Request) {
 		var req LoginRequest
@@ -90,6 +94,10 @@ func RegisterAPI(mux *http.ServeMux, manager *Manager, auth *Auth) {
 	})
 	mux.Handle("GET /api/me", auth.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]bool{"authenticated": true})
+	})))
+	mux.Handle("GET /api/security/status", auth.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		cfg := manager.ConfigSnapshot()
+		writeJSON(w, http.StatusOK, auth.SecurityStatus(cfg.Server.AdminUser, cfg))
 	})))
 	mux.Handle("POST /api/password/change", auth.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req ChangePasswordRequest
@@ -112,6 +120,227 @@ func RegisterAPI(mux *http.ServeMux, manager *Manager, auth *Auth) {
 	mux.Handle("GET /api/config", auth.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, manager.ConfigSnapshot())
 	})))
+	mux.Handle("GET /api/v2/model", auth.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, manager.V2ModelSnapshot())
+	})))
+	mux.Handle("GET /api/v2/generated-config", auth.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		cfg, err := manager.GeneratedV2SingBoxConfig()
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, cfg)
+	})))
+	mux.Handle("GET /api/v2/entries", auth.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]any{"entries": manager.V2ModelSnapshot().Entries})
+	})))
+	mux.Handle("PUT /api/v2/entries", auth.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req EntryConfig
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid json body")
+			return
+		}
+		entry, err := manager.UpsertV2Entry(req)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"entry": entry, "model": manager.V2ModelSnapshot()})
+	})))
+	mux.Handle("DELETE /api/v2/entries/{id}", auth.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := manager.DeleteV2Entry(r.PathValue("id")); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+	})))
+	mux.Handle("GET /api/v2/subscriptions", auth.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]any{"subscriptions": manager.V2ModelSnapshot().Subscriptions})
+	})))
+	mux.Handle("PUT /api/v2/subscriptions", auth.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req SubscriptionConfig
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid json body")
+			return
+		}
+		subscription, err := manager.UpsertV2Subscription(req)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"subscription": subscription, "model": manager.V2ModelSnapshot()})
+	})))
+	mux.Handle("DELETE /api/v2/subscriptions/{id}", auth.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := manager.DeleteV2Subscription(r.PathValue("id")); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+	})))
+	mux.Handle("GET /api/v2/nodes", auth.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]any{"nodes": manager.V2ModelSnapshot().Nodes})
+	})))
+	mux.Handle("PUT /api/v2/nodes", auth.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req OutboundNodeConfig
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid json body")
+			return
+		}
+		node, err := manager.UpsertV2Node(req)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"node": node, "model": manager.V2ModelSnapshot()})
+	})))
+	mux.Handle("POST /api/v2/nodes/import", auth.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req ImportLinksRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid json body")
+			return
+		}
+		outbounds, parseErrorDetails := ParseOutboundLinksDetailed(req.Text)
+		if len(outbounds) == 0 {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"parsed": 0, "parse_errors": parseErrorDetails})
+			return
+		}
+		nodes, err := manager.ImportV2NodesFromOutbounds(outbounds)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusCreated, map[string]any{"nodes": nodes, "parsed": len(outbounds), "parse_errors": parseErrorDetails})
+	})))
+	mux.Handle("PATCH /api/v2/nodes/{id}/enabled", auth.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req NodeEnableRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid json body")
+			return
+		}
+		node, err := manager.SetV2NodeEnabled(r.PathValue("id"), req.Enabled)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"node": node})
+	})))
+	mux.Handle("DELETE /api/v2/nodes/{id}", auth.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := manager.DeleteV2Node(r.PathValue("id")); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+	})))
+	mux.Handle("GET /api/v2/region-groups", auth.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]any{"region_groups": manager.V2ModelSnapshot().RegionGroups})
+	})))
+	mux.Handle("PUT /api/v2/region-groups", auth.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req RegionGroupConfig
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid json body")
+			return
+		}
+		group, err := manager.UpsertV2RegionGroup(req)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"region_group": group, "model": manager.V2ModelSnapshot()})
+	})))
+	mux.Handle("DELETE /api/v2/region-groups/{id}", auth.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := manager.DeleteV2RegionGroup(r.PathValue("id")); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+	})))
+	mux.Handle("GET /api/v2/app-policy-groups", auth.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]any{"app_policy_groups": manager.V2ModelSnapshot().AppPolicyGroups})
+	})))
+	mux.Handle("PUT /api/v2/app-policy-groups", auth.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req AppPolicyGroupConfig
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid json body")
+			return
+		}
+		policy, err := manager.UpsertV2PolicyGroup(req)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"app_policy_group": policy, "model": manager.V2ModelSnapshot()})
+	})))
+	mux.Handle("DELETE /api/v2/app-policy-groups/{id}", auth.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := manager.DeleteV2PolicyGroup(r.PathValue("id")); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+	})))
+	mux.Handle("GET /api/v2/route-rules", auth.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]any{"route_rules": manager.V2ModelSnapshot().RouteRules})
+	})))
+	mux.Handle("PUT /api/v2/route-rules", auth.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req RouteRuleConfig
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid json body")
+			return
+		}
+		rule, err := manager.UpsertV2RouteRule(req)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"route_rule": rule, "model": manager.V2ModelSnapshot()})
+	})))
+	mux.Handle("PUT /api/v2/route-rules/bulk", auth.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req V2RouteRulesRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid json body")
+			return
+		}
+		rules, err := manager.ReplaceV2RouteRules(req.Rules)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"route_rules": rules, "model": manager.V2ModelSnapshot()})
+	})))
+	mux.Handle("DELETE /api/v2/route-rules/{id}", auth.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := manager.DeleteV2RouteRule(r.PathValue("id")); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+	})))
+	mux.Handle("GET /api/config/history", auth.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		entries, err := manager.ListConfigHistory(parsePositiveInt(r.URL.Query().Get("limit"), 20))
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"history": entries})
+	})))
+	mux.Handle("POST /api/config/history/{id}/restore", auth.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "valid config history id is required")
+			return
+		}
+		if err := manager.RestoreConfigHistory(id); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"status": "restored", "config": manager.ConfigSnapshot()})
+	})))
+	mux.Handle("DELETE /api/config/history/cleanup", auth.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		deleted, err := manager.CleanupConfigHistory(parsePositiveInt(r.URL.Query().Get("keep"), 100))
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"deleted": deleted})
+	})))
 	mux.Handle("GET /api/system/kernels", auth.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"kernels": DetectKernels(manager.ConfigSnapshot())})
 	})))
@@ -123,6 +352,30 @@ func RegisterAPI(mux *http.ServeMux, manager *Manager, auth *Auth) {
 	})))
 	mux.Handle("GET /api/system/ports", auth.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, ListListeningPorts())
+	})))
+	mux.Handle("GET /api/system/backup", auth.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path, err := CreateBackupPackage()
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		ServePackage(w, r, path)
+	})))
+	mux.Handle("POST /api/system/restore", auth.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		result, err := RestoreBackupPackage(r, manager)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, result)
+	})))
+	mux.Handle("GET /api/system/diagnostics", auth.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path, err := CreateDiagnosticPackage(manager)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		ServePackage(w, r, path)
 	})))
 	mux.Handle("POST /api/system/service/restart", auth.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		result, err := RunServiceAction("restart")
@@ -152,7 +405,7 @@ func RegisterAPI(mux *http.ServeMux, manager *Manager, auth *Auth) {
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"status": "saved", "kernel": manager.Status().Kernel})
 	})))
-	mux.Handle("PUT /api/mihomo/config", auth.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	saveSubscriptionConfigHandler := auth.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req MihomoConfig
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeError(w, http.StatusBadRequest, "invalid json body")
@@ -162,8 +415,10 @@ func RegisterAPI(mux *http.ServeMux, manager *Manager, auth *Auth) {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"status": "saved", "mihomo": manager.ConfigSnapshot().Mihomo})
-	})))
+		writeJSON(w, http.StatusOK, map[string]any{"status": "saved", "subscriptions": manager.V2ModelSnapshot().Subscriptions})
+	}))
+	mux.Handle("PUT /api/subscriptions/config", saveSubscriptionConfigHandler)
+	mux.Handle("PUT /api/mihomo/config", saveSubscriptionConfigHandler)
 	mux.Handle("PUT /api/routing/config", auth.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req RoutingConfig
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -175,6 +430,14 @@ func RegisterAPI(mux *http.ServeMux, manager *Manager, auth *Auth) {
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"status": "saved", "routing": manager.ConfigSnapshot().Routing})
+	})))
+	mux.Handle("POST /api/routing/preview", auth.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req RoutingPreviewRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid json body")
+			return
+		}
+		writeJSON(w, http.StatusOK, manager.PreviewRouting(req))
 	})))
 	mux.Handle("POST /api/subscription/preview", auth.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req SubscriptionPreviewRequest
@@ -278,13 +541,34 @@ func RegisterAPI(mux *http.ServeMux, manager *Manager, auth *Auth) {
 			writeError(w, http.StatusBadRequest, "invalid json body")
 			return
 		}
-		outbounds, parseErrors := ParseOutboundLinks(req.Text)
-		nodes, err := manager.ImportOutbounds(outbounds)
+		outbounds, parseErrorDetails := ParseOutboundLinksDetailed(req.Text)
+		parseErrors := make([]string, 0, len(parseErrorDetails))
+		for _, detail := range parseErrorDetails {
+			parseErrors = append(parseErrors, detail.Error)
+		}
+		if len(outbounds) == 0 {
+			writeJSON(w, http.StatusBadRequest, ImportLinksResponse{
+				Parsed:      0,
+				Errors:      parseErrors,
+				ParseErrors: parseErrorDetails,
+			})
+			return
+		}
+		report, err := manager.ImportOutboundsReport(outbounds)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		writeJSON(w, http.StatusCreated, ImportLinksResponse{Imported: nodes, Parsed: len(outbounds), Errors: parseErrors})
+		writeJSON(w, http.StatusCreated, ImportLinksResponse{
+			Imported:    report.Imported,
+			Parsed:      report.Parsed,
+			Added:       report.Added,
+			Updated:     report.Updated,
+			Unchanged:   report.Unchanged,
+			Details:     report.Details,
+			Errors:      parseErrors,
+			ParseErrors: parseErrorDetails,
+		})
 	})))
 	mux.Handle("POST /api/nodes/{type}/{name}/test", auth.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		result, err := manager.TestNode(r.PathValue("type"), r.PathValue("name"))
@@ -314,6 +598,14 @@ func RegisterAPI(mux *http.ServeMux, manager *Manager, auth *Auth) {
 	})))
 	mux.Handle("POST /api/outbounds/{name}/share", auth.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		result, err := manager.ShareOutbound(r.PathValue("name"))
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, result)
+	})))
+	mux.Handle("GET /api/outbounds/{name}/inspect", auth.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		result, err := manager.InspectOutbound(r.PathValue("name"))
 		if err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
@@ -359,14 +651,10 @@ func RegisterAPI(mux *http.ServeMux, manager *Manager, auth *Auth) {
 			writeError(w, http.StatusBadRequest, "invalid json body")
 			return
 		}
-		nodes := make([]Node, 0, len(req.Items))
-		for _, item := range req.Items {
-			node, err := manager.SetNodeEnabled(item.Type, item.Name, req.Enabled)
-			if err != nil {
-				writeError(w, http.StatusBadRequest, err.Error())
-				return
-			}
-			nodes = append(nodes, node)
+		nodes, err := manager.SetNodesEnabled(req.Items, req.Enabled)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"nodes": nodes})
 	})))
@@ -376,13 +664,12 @@ func RegisterAPI(mux *http.ServeMux, manager *Manager, auth *Auth) {
 			writeError(w, http.StatusBadRequest, "invalid json body")
 			return
 		}
-		for _, item := range req.Items {
-			if err := manager.DeleteNode(item.Type, item.Name); err != nil {
-				writeError(w, http.StatusBadRequest, err.Error())
-				return
-			}
+		deleted, err := manager.DeleteNodes(req.Items)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"deleted": len(req.Items)})
+		writeJSON(w, http.StatusOK, map[string]any{"deleted": deleted})
 	})))
 	mux.Handle("DELETE /api/nodes/{type}/{name}", auth.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if err := manager.DeleteNode(r.PathValue("type"), r.PathValue("name")); err != nil {

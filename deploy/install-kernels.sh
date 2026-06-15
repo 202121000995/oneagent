@@ -18,7 +18,6 @@ need_cmd() {
 
 need_cmd curl
 need_cmd tar
-need_cmd gzip
 
 case "$(uname -m)" in
   x86_64|amd64) ARCH="amd64" ;;
@@ -54,35 +53,17 @@ install_sing_box() {
   rm -rf "$tmp"
 }
 
-install_mihomo() {
-  url="$(latest_asset_url "MetaCubeX/mihomo" "linux-${ARCH}.*\\.gz")"
-  if [ -z "$url" ]; then
-    echo "没有找到 mihomo linux-${ARCH} 发布包"
-    exit 1
-  fi
-  tmp="$(mktemp -d)"
-  curl -fL "$url" -o "${tmp}/mihomo.gz"
-  gzip -dc "${tmp}/mihomo.gz" > "${tmp}/mihomo"
-  install -m 0755 "${tmp}/mihomo" "${INSTALL_DIR}/mihomo"
-  "${INSTALL_DIR}/mihomo" -v || true
-  rm -rf "$tmp"
-}
-
 mkdir -p "$INSTALL_DIR"
 
 case "$KERNEL" in
   all)
     install_sing_box
-    install_mihomo
     ;;
   sing-box)
     install_sing_box
     ;;
-  mihomo)
-    install_mihomo
-    ;;
   *)
-    echo "KERNEL 只能是 all、sing-box 或 mihomo"
+    echo "KERNEL 只能是 all 或 sing-box"
     exit 1
     ;;
 esac

@@ -74,7 +74,6 @@ type ServiceActionResult struct {
 func DetectKernels(cfg Config) []KernelProbe {
 	return []KernelProbe{
 		detectKernel("sing-box", cfg.Kernel),
-		detectKernel("mihomo", cfg.Kernel),
 	}
 }
 
@@ -83,11 +82,7 @@ func detectKernel(name string, cfg KernelConfig) KernelProbe {
 	if cfg.Type == name && cfg.Executable != "" {
 		candidates = append([]string{cfg.Executable}, candidates...)
 	}
-	if name == "sing-box" {
-		candidates = append(candidates, "/usr/local/bin/sing-box", "/usr/bin/sing-box")
-	} else {
-		candidates = append(candidates, "/usr/local/bin/mihomo", "/usr/bin/mihomo")
-	}
+	candidates = append(candidates, "/usr/local/bin/sing-box", "/usr/bin/sing-box")
 
 	seen := map[string]struct{}{}
 	for _, candidate := range candidates {
@@ -132,9 +127,6 @@ func resolveExecutable(candidate string) (string, error) {
 
 func kernelVersion(path, name string) (string, error) {
 	argSets := [][]string{{"version"}, {"--version"}, {"-v"}}
-	if name == "mihomo" {
-		argSets = [][]string{{"-v"}, {"-version"}, {"--version"}, {"version"}}
-	}
 	for _, args := range argSets {
 		output, err := runShortCommand(path, args...)
 		if err == nil && strings.TrimSpace(output) != "" {
@@ -179,7 +171,7 @@ func AgentServiceInfo() ServiceInfo {
 		Unit:        unit,
 		Commands: []string{
 			"mkdir -p kernels",
-			"# 下载 sing-box 和 mihomo 的 Linux amd64 发布文件到 kernels/",
+			"# 下载 sing-box 的 Linux amd64 发布文件到 kernels/",
 			"DEPLOY_WEB_PORT=39080 GO_BIN=/Users/apple/Library/Go/sdk/go1.26.3/bin/go ARCH=amd64 ./deploy/package-offline.sh",
 			"unzip nodetools-agent-offline-linux-amd64.zip",
 			"cd nodetools-agent-offline",
@@ -187,7 +179,7 @@ func AgentServiceInfo() ServiceInfo {
 			"sudo journalctl -u nodetools-agent -f",
 		},
 		Notes: []string{
-			"推荐先在本机生成带 sing-box / mihomo 的离线 zip，再上传到 VPS 解压安装。",
+			"推荐先在本机生成带 sing-box 的离线 zip，再上传到 VPS 解压安装。",
 			"默认缺少内核时 package-offline.sh 会停止，避免生成半成品离线包。",
 			"install-offline.sh 会安装 systemd 服务、检查本机端口，并提示云安全组放行。",
 			"升级安装会保留 database、logs 和现有 config.yaml，并在 backups/ 下备份配置。",

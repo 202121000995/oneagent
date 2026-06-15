@@ -13,15 +13,12 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"gopkg.in/yaml.v3"
 )
 
 type RuntimeState struct {
 	Inbounds  []InboundConfig  `json:"inbounds"`
 	Outbounds []OutboundConfig `json:"outbounds"`
 	Routing   RoutingConfig    `json:"routing"`
-	Mihomo    MihomoConfig     `json:"mihomo"`
 }
 
 type Kernel interface {
@@ -59,10 +56,6 @@ func NewKernel(cfg KernelConfig) Kernel {
 		return kernel
 	case "sing-box":
 		kernel := NewSingBoxKernel()
-		kernel.Configure(cfg)
-		return kernel
-	case "mihomo":
-		kernel := NewMihomoKernel()
 		kernel.Configure(cfg)
 		return kernel
 	default:
@@ -300,11 +293,15 @@ func (k *SingBoxKernel) Name() string {
 
 func (k *SingBoxKernel) GenerateConfig(state RuntimeState) ([]byte, error) {
 	final := routeFinal(state.Routing)
+	route := map[string]any{"rules": singBoxRules(state.Routing), "final": final}
+	if ruleSets := singBoxRuleSets(state.Routing.RuleSets); len(ruleSets) > 0 {
+		route["rule_set"] = ruleSets
+	}
 	payload := map[string]any{
 		"log":       map[string]any{"level": "info", "timestamp": true},
 		"inbounds":  singBoxInbounds(state.Inbounds),
 		"outbounds": singBoxOutbounds(state.Outbounds),
-		"route":     map[string]any{"rules": singBoxRules(state.Routing), "final": final},
+		"route":     route,
 	}
 	return json.MarshalIndent(payload, "", "  ")
 }
@@ -345,88 +342,19 @@ func (k *SingBoxKernel) Status() KernelStatus {
 	return k.status()
 }
 
-type MihomoKernel struct {
-	baseKernel
-}
-
-func NewMihomoKernel() *MihomoKernel {
-	return &MihomoKernel{baseKernel: baseKernel{name: "mihomo", mode: "external"}}
-}
-
-func (k *MihomoKernel) Name() string {
-	return "mihomo"
-}
-
-func (k *MihomoKernel) GenerateConfig(state RuntimeState) ([]byte, error) {
-	proxies := mihomoProxies(state.Outbounds)
-	proxyNames := []string{"DIRECT"}
-	for _, proxy := range proxies {
-		if name, ok := proxy["name"].(string); ok {
-			proxyNames = append(proxyNames, name)
-		}
-	}
-
-	proxyGroups := mihomoProxyGroups(state.Mihomo, proxyNames)
-	payload := map[string]any{
-		"mixed-port":                mihomoMixedPort(state.Inbounds),
-		"allow-lan":                 true,
-		"mode":                      "rule",
-		"log-level":                 "info",
-		"external-controller":       "127.0.0.1:9090",
-		"global-client-fingerprint": "chrome",
-		"unified-delay":             true,
-		"tcp-concurrent":            true,
-		"profile":                   map[string]bool{"store-selected": true},
-		"proxies":                   proxies,
-		"proxy-groups":              proxyGroups,
-		"rules":                     mihomoRules(state.Routing, state.Mihomo, proxyGroups, state.Inbounds),
-	}
-	if providers := mihomoProviders(state.Mihomo); len(providers) > 0 {
-		payload["proxy-providers"] = providers
-	}
-	return yaml.Marshal(payload)
-}
-
-func (k *MihomoKernel) ValidateConfig(path string) error {
-	executable := k.executable()
-	if executable == "" {
-		return fmt.Errorf("mihomo executable is required")
-	}
-	output, err := exec.Command(executable, "-t", "-f", path).CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("%v: %s", err, string(output))
-	}
-	return nil
-}
-
-func (k *MihomoKernel) Start(path string) error {
-	if err := k.ValidateConfig(path); err != nil {
-		k.setApplied(false, err)
-		return err
-	}
-	if err := k.startProcess("-f", path); err != nil {
-		return err
-	}
-	log.Printf("mihomo started with %s", path)
-	return nil
-}
-
-func (k *MihomoKernel) Reload(path string) error {
-	return k.Start(path)
-}
-
-func (k *MihomoKernel) Stop() error {
-	return k.stopProcess()
-}
-
-func (k *MihomoKernel) Status() KernelStatus {
-	return k.status()
-}
-
 func singBoxInbounds(inbounds []InboundConfig) []map[string]any {
 	items := make([]map[string]any, 0, len(inbounds))
 	for _, inbound := range inbounds {
-		base := map[string]any{"tag": inbound.Name, "listen": firstNonEmpty(inbound.Listen, "::"), "listen_port": inbound.Port}
+		if len(inbound.ProtocolConfig) > 0 {
+			item := copyMap(inbound.ProtocolConfig)
+			finalizeSingBoxInbound(item, inbound)
+			items = append(items, item)
+			continue
+		}
+		base := map[string]any{"tag": inbound.Name, "listen": firstNonEmpty(inbound.Listen, "::")}
+		if inbound.Port > 0 {
+			base["listen_port"] = inbound.Port
+		}
 		switch inbound.Protocol {
 		case "mixed":
 			base["type"] = "mixed"
@@ -490,11 +418,25 @@ func singBoxInbounds(inbounds []InboundConfig) []map[string]any {
 			base["override_address"] = inbound.TargetHost
 			base["override_port"] = inbound.TargetPort
 		default:
-			base["type"] = "mixed"
+			base["type"] = firstNonEmpty(inbound.Protocol, "mixed")
 		}
+		finalizeSingBoxInbound(base, inbound)
 		items = append(items, base)
 	}
 	return items
+}
+
+func finalizeSingBoxInbound(item map[string]any, inbound InboundConfig) {
+	item["tag"] = inbound.Name
+	if stringValue(item["type"]) == "" {
+		item["type"] = firstNonEmpty(inbound.Protocol, "mixed")
+	}
+	if stringValue(item["listen"]) == "" && len(inbound.ProtocolConfig) == 0 {
+		item["listen"] = firstNonEmpty(inbound.Listen, "::")
+	}
+	if _, ok := item["listen_port"]; !ok && inbound.Port > 0 {
+		item["listen_port"] = inbound.Port
+	}
 }
 
 func addSingBoxInboundTLS(target map[string]any, inbound InboundConfig) {
@@ -545,9 +487,44 @@ func addSingBoxInboundTransport(target map[string]any, inbound InboundConfig) {
 }
 
 func singBoxOutbounds(outbounds []OutboundConfig) []map[string]any {
-	items := []map[string]any{{"type": "direct", "tag": "direct"}}
+	items := make([]map[string]any, 0, len(outbounds)+1)
+	hasDirect := false
 	for _, outbound := range outbounds {
+		if outbound.Name == "direct" {
+			hasDirect = true
+		}
+		if len(outbound.RawConfig) > 0 {
+			item := copyMap(outbound.RawConfig)
+			item["tag"] = firstNonEmpty(outbound.Name, stringValue(item["tag"]))
+			item["type"] = firstNonEmpty(stringValue(item["type"]), outbound.Protocol)
+			items = append(items, item)
+			continue
+		}
 		if outbound.Address == "" || outbound.Protocol == "direct" {
+			if outbound.Protocol == "block" {
+				items = append(items, map[string]any{"type": "block", "tag": outbound.Name})
+				continue
+			}
+			if outbound.Protocol == "selector" {
+				candidates := fallbackCandidates(outbound.SelectorOutbounds, []string{"direct"})
+				items = append(items, map[string]any{"type": "selector", "tag": outbound.Name, "outbounds": candidates, "default": firstAvailable(outbound.Default, candidates)})
+				continue
+			}
+			if outbound.Protocol == "urltest" {
+				candidates := fallbackCandidates(outbound.SelectorOutbounds, []string{"direct"})
+				item := map[string]any{
+					"type":      "urltest",
+					"tag":       outbound.Name,
+					"outbounds": candidates,
+					"url":       firstNonEmpty(outbound.URL, defaultSmartURL),
+					"interval":  firstNonEmpty(outbound.Interval, defaultSmartInterval),
+				}
+				if outbound.Tolerance > 0 {
+					item["tolerance"] = outbound.Tolerance
+				}
+				items = append(items, item)
+				continue
+			}
 			items = append(items, map[string]any{"type": "direct", "tag": outbound.Name})
 			continue
 		}
@@ -611,6 +588,9 @@ func singBoxOutbounds(outbounds []OutboundConfig) []map[string]any {
 		case "hysteria2":
 			base["type"] = "hysteria2"
 			base["password"] = outbound.Password
+			if outbound.MPort != "" {
+				base["server_ports"] = singBoxPortRanges(outbound.MPort)
+			}
 			if outbound.UpMbps > 0 {
 				base["up_mbps"] = outbound.UpMbps
 			}
@@ -626,13 +606,14 @@ func singBoxOutbounds(outbounds []OutboundConfig) []map[string]any {
 			base["type"] = "tuic"
 			base["uuid"] = outbound.UUID
 			base["password"] = outbound.Password
-			addOptional(base, "congestion_control", outbound.Congestion)
-			addOptional(base, "udp_relay_mode", outbound.UDPRelayMode)
+			addOptional(base, "congestion_control", firstNonEmpty(outbound.Congestion, "bbr"))
+			addOptional(base, "udp_relay_mode", firstNonEmpty(outbound.UDPRelayMode, "native"))
 			addTLS(base, outbound)
 			items = append(items, base)
 		case "anytls":
 			base["type"] = "anytls"
 			base["password"] = outbound.Password
+			addAnyTLSIdleFields(base, outbound)
 			addTLS(base, outbound)
 			items = append(items, base)
 		case "naive":
@@ -651,6 +632,9 @@ func singBoxOutbounds(outbounds []OutboundConfig) []map[string]any {
 		default:
 			items = append(items, map[string]any{"type": "direct", "tag": outbound.Name})
 		}
+	}
+	if !hasDirect {
+		items = append([]map[string]any{{"type": "direct", "tag": "direct"}}, items...)
 	}
 	return items
 }
@@ -676,6 +660,10 @@ func singBoxRules(routing RoutingConfig) []map[string]any {
 			item["domain_suffix"] = splitCSV(value)
 		case "domain_keyword":
 			item["domain_keyword"] = splitCSV(value)
+		case "domain_regex":
+			item["domain_regex"] = splitCSV(value)
+		case "rule_set":
+			item["rule_set"] = splitCSV(value)
 		case "ip_cidr":
 			item["ip_cidr"] = splitCSV(value)
 		case "geoip":
@@ -686,6 +674,8 @@ func singBoxRules(routing RoutingConfig) []map[string]any {
 			item["protocol"] = splitCSV(value)
 		case "port":
 			item["port"] = splitInts(value)
+		case "network":
+			item["network"] = splitCSV(value)
 		default:
 			continue
 		}
@@ -694,107 +684,42 @@ func singBoxRules(routing RoutingConfig) []map[string]any {
 	return items
 }
 
-func mihomoMixedPort(inbounds []InboundConfig) int {
-	for _, inbound := range inbounds {
-		switch inbound.Protocol {
-		case "mixed", "socks", "socks5", "http":
-			return inbound.Port
-		}
-	}
-	if len(inbounds) > 0 {
-		return inbounds[0].Port
-	}
-	return 7890
-}
-
-func mihomoProxies(outbounds []OutboundConfig) []map[string]any {
-	items := make([]map[string]any, 0, len(outbounds))
-	for _, outbound := range outbounds {
-		if outbound.Address == "" {
+func singBoxRuleSets(ruleSets []RuleSetConfig) []map[string]any {
+	items := make([]map[string]any, 0, len(ruleSets))
+	for _, ruleSet := range ruleSets {
+		if ruleSet.Tag == "" {
 			continue
 		}
-		base := map[string]any{"name": outbound.Name, "server": outbound.Address, "port": outbound.Port}
-		switch outbound.Protocol {
-		case "socks", "socks5":
-			item := map[string]any{"name": outbound.Name, "type": "socks5", "server": outbound.Address, "port": outbound.Port}
-			addOptional(item, "username", outbound.Username)
-			addOptional(item, "password", outbound.Password)
-			items = append(items, item)
-		case "http":
-			item := map[string]any{"name": outbound.Name, "type": "http", "server": outbound.Address, "port": outbound.Port}
-			addOptional(item, "username", outbound.Username)
-			addOptional(item, "password", outbound.Password)
-			items = append(items, item)
-		case "vless":
-			base["type"] = "vless"
-			base["uuid"] = outbound.UUID
-			addMihomoTLS(base, outbound)
-			addMihomoNetwork(base, outbound)
-			items = append(items, base)
-		case "vmess":
-			base["type"] = "vmess"
-			base["uuid"] = outbound.UUID
-			base["alterId"] = outbound.AlterID
-			if outbound.Security == "" {
-				base["cipher"] = "auto"
-			} else {
-				base["cipher"] = outbound.Security
+		item := map[string]any{"type": firstNonEmpty(ruleSet.Type, "inline"), "tag": ruleSet.Tag}
+		switch item["type"] {
+		case "local":
+			item["format"] = firstNonEmpty(ruleSet.Format, "source")
+			item["path"] = ruleSet.Path
+		case "remote":
+			item["format"] = firstNonEmpty(ruleSet.Format, "source")
+			item["url"] = ruleSet.URL
+			addOptional(item, "download_detour", ruleSet.DownloadDetour)
+			addOptional(item, "update_interval", ruleSet.UpdateInterval)
+		default:
+			rule := map[string]any{}
+			if len(ruleSet.Domain) > 0 {
+				rule["domain"] = ruleSet.Domain
 			}
-			addMihomoTLS(base, outbound)
-			addMihomoNetwork(base, outbound)
-			items = append(items, base)
-		case "trojan":
-			base["type"] = "trojan"
-			base["password"] = outbound.Password
-			addMihomoTLS(base, outbound)
-			addMihomoNetwork(base, outbound)
-			items = append(items, base)
-		case "shadowsocks", "ss":
-			base["type"] = "ss"
-			base["cipher"] = outbound.Method
-			base["password"] = outbound.Password
-			items = append(items, base)
-		case "hysteria2":
-			base["type"] = "hysteria2"
-			base["password"] = outbound.Password
-			if outbound.UpMbps > 0 {
-				base["up"] = outbound.UpMbps
+			if len(ruleSet.DomainSuffix) > 0 {
+				rule["domain_suffix"] = ruleSet.DomainSuffix
 			}
-			if outbound.DownMbps > 0 {
-				base["down"] = outbound.DownMbps
+			if len(ruleSet.DomainKeyword) > 0 {
+				rule["domain_keyword"] = ruleSet.DomainKeyword
 			}
-			if outbound.Obfs != "" && outbound.Obfs != "none" {
-				base["obfs"] = outbound.Obfs
-				addOptional(base, "obfs-password", outbound.ObfsPassword)
+			if len(ruleSet.IPCIDR) > 0 {
+				rule["ip_cidr"] = ruleSet.IPCIDR
 			}
-			addMihomoTLS(base, outbound)
-			items = append(items, base)
-		case "tuic":
-			base["type"] = "tuic"
-			base["uuid"] = outbound.UUID
-			base["password"] = outbound.Password
-			addOptional(base, "congestion-controller", outbound.Congestion)
-			addOptional(base, "udp-relay-mode", outbound.UDPRelayMode)
-			addMihomoTLS(base, outbound)
-			items = append(items, base)
-		case "anytls":
-			base["type"] = "anytls"
-			base["password"] = outbound.Password
-			addMihomoTLS(base, outbound)
-			items = append(items, base)
-		case "naive":
-			base["type"] = "http"
-			base["username"] = firstNonEmpty(outbound.Username, outbound.UUID)
-			base["password"] = outbound.Password
-			addMihomoTLS(base, outbound)
-			items = append(items, base)
-		case "shadowtls":
-			base["type"] = "shadowtls"
-			base["password"] = outbound.Password
-			base["version"] = 3
-			addMihomoTLS(base, outbound)
-			items = append(items, base)
+			if len(rule) == 0 {
+				continue
+			}
+			item["rules"] = []map[string]any{rule}
 		}
+		items = append(items, item)
 	}
 	return items
 }
@@ -802,6 +727,20 @@ func mihomoProxies(outbounds []OutboundConfig) []map[string]any {
 func addOptional(target map[string]any, key string, value string) {
 	if value != "" {
 		target[key] = value
+	}
+}
+
+func mergeMap(target map[string]any, values map[string]any) {
+	for key, value := range values {
+		target[key] = value
+	}
+}
+
+func addAnyTLSIdleFields(target map[string]any, outbound OutboundConfig) {
+	addOptional(target, "idle_session_check_interval", outbound.IdleSessionCheck)
+	addOptional(target, "idle_session_timeout", outbound.IdleSessionTimeout)
+	if outbound.MinIdleSession > 0 {
+		target["min_idle_session"] = outbound.MinIdleSession
 	}
 }
 
@@ -862,6 +801,24 @@ func splitInts(value string) []int {
 	return out
 }
 
+func singBoxPortRanges(value string) []string {
+	parts := splitCSV(value)
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if strings.Contains(part, "-") {
+			bounds := strings.SplitN(part, "-", 2)
+			left, leftErr := strconv.Atoi(strings.TrimSpace(bounds[0]))
+			right, rightErr := strconv.Atoi(strings.TrimSpace(bounds[1]))
+			if leftErr == nil && rightErr == nil && left > 0 && right > 0 && left <= right && right <= 65535 {
+				out = append(out, fmt.Sprintf("%d:%d", left, right))
+				continue
+			}
+		}
+		out = append(out, part)
+	}
+	return out
+}
+
 func addSingBoxTransport(target map[string]any, outbound OutboundConfig) {
 	if outbound.Transport == "" || outbound.Transport == "tcp" {
 		return
@@ -878,174 +835,6 @@ func addSingBoxTransport(target map[string]any, outbound OutboundConfig) {
 	target["transport"] = transport
 }
 
-func addMihomoTLS(target map[string]any, outbound OutboundConfig) {
-	if outbound.TLS {
-		target["tls"] = true
-	}
-	if outbound.ServerName != "" {
-		target["servername"] = outbound.ServerName
-	}
-	if outbound.SkipCertVerify {
-		target["skip-cert-verify"] = true
-	}
-	if outbound.Security == "reality" || outbound.PublicKey != "" {
-		target["reality-opts"] = map[string]any{"public-key": outbound.PublicKey, "short-id": outbound.ShortID}
-	}
-}
-
-func addMihomoNetwork(target map[string]any, outbound OutboundConfig) {
-	if outbound.Transport == "" && outbound.Network == "" {
-		return
-	}
-	network := outbound.Transport
-	if network == "" {
-		network = outbound.Network
-	}
-	target["network"] = network
-	if network == "ws" {
-		opts := map[string]any{}
-		addOptional(opts, "path", outbound.Path)
-		if outbound.Host != "" {
-			opts["headers"] = map[string]string{"Host": outbound.Host}
-		}
-		target["ws-opts"] = opts
-	}
-}
-
-func mihomoProviders(cfg MihomoConfig) map[string]any {
-	providers := map[string]any{}
-	for _, provider := range cfg.Providers {
-		if provider.Name == "" || provider.URL == "" {
-			continue
-		}
-		interval := provider.Interval
-		if interval == 0 {
-			interval = 3600
-		}
-		providerType := provider.Type
-		if providerType == "" {
-			providerType = "http"
-		}
-		path := provider.Path
-		if path == "" {
-			path = "./providers/" + provider.Name + ".yaml"
-		}
-		item := map[string]any{"type": providerType, "url": provider.URL, "path": path, "interval": interval}
-		if provider.HealthCheckURL != "" {
-			item["health-check"] = map[string]any{"enable": true, "url": provider.HealthCheckURL, "lazy": provider.HealthCheckLazy}
-		}
-		providers[provider.Name] = item
-	}
-	return providers
-}
-
-func mihomoProxyGroups(cfg MihomoConfig, defaultProxies []string) []map[string]any {
-	if len(cfg.ProxyGroups) == 0 {
-		return []map[string]any{{"name": "NodeTools", "type": "select", "proxies": defaultProxies}}
-	}
-	groups := make([]map[string]any, 0, len(cfg.ProxyGroups))
-	for _, group := range cfg.ProxyGroups {
-		if group.Name == "" {
-			continue
-		}
-		groupType := group.Type
-		if groupType == "" {
-			groupType = "select"
-		}
-		proxies := group.Proxies
-		if len(proxies) == 0 && len(group.Use) == 0 {
-			proxies = defaultProxies
-		}
-		item := map[string]any{"name": group.Name, "type": groupType}
-		if len(proxies) > 0 {
-			item["proxies"] = proxies
-		}
-		if len(group.Use) > 0 {
-			item["use"] = group.Use
-		}
-		addOptional(item, "url", group.URL)
-		if group.Interval > 0 {
-			item["interval"] = group.Interval
-		}
-		if group.Tolerance > 0 {
-			item["tolerance"] = group.Tolerance
-		}
-		groups = append(groups, item)
-	}
-	return groups
-}
-
-func mihomoRules(routing RoutingConfig, cfg MihomoConfig, groups []map[string]any, inbounds []InboundConfig) []string {
-	if len(cfg.Rules) > 0 {
-		return cfg.Rules
-	}
-	target := mihomoTargetName(routeFinal(routing))
-	if target == "DIRECT" && len(groups) > 0 && routingMode(routing.Mode) == "global" {
-		if name, ok := groups[0]["name"].(string); ok {
-			target = name
-		}
-	}
-	if routingMode(routing.Mode) == "direct" {
-		return []string{"MATCH,DIRECT"}
-	}
-	if routingMode(routing.Mode) == "global" {
-		return []string{"MATCH," + target}
-	}
-	rules := sortedRoutingRules(routing.Rules)
-	items := make([]string, 0, len(rules)+1)
-	inboundPorts := map[string]int{}
-	for _, inbound := range inbounds {
-		inboundPorts[inbound.Name] = inbound.Port
-	}
-	for _, rule := range rules {
-		if rule.Disabled {
-			continue
-		}
-		outbound := mihomoTargetName(rule.Outbound)
-		value := routingRuleValue(rule)
-		switch routingRuleMatchType(rule) {
-		case "inbound":
-			if port := inboundPorts[value]; port > 0 {
-				items = append(items, fmt.Sprintf("IN-PORT,%d,%s", port, outbound))
-			}
-		case "domain":
-			for _, item := range splitCSV(value) {
-				items = append(items, fmt.Sprintf("DOMAIN,%s,%s", item, outbound))
-			}
-		case "domain_suffix":
-			for _, item := range splitCSV(value) {
-				items = append(items, fmt.Sprintf("DOMAIN-SUFFIX,%s,%s", item, outbound))
-			}
-		case "domain_keyword":
-			for _, item := range splitCSV(value) {
-				items = append(items, fmt.Sprintf("DOMAIN-KEYWORD,%s,%s", item, outbound))
-			}
-		case "ip_cidr":
-			for _, item := range splitCSV(value) {
-				items = append(items, fmt.Sprintf("IP-CIDR,%s,%s,no-resolve", item, outbound))
-			}
-		case "geoip":
-			for _, item := range splitCSV(value) {
-				items = append(items, fmt.Sprintf("GEOIP,%s,%s", item, outbound))
-			}
-		case "geosite":
-			for _, item := range splitCSV(value) {
-				items = append(items, fmt.Sprintf("GEOSITE,%s,%s", item, outbound))
-			}
-		case "protocol":
-			for _, item := range splitCSV(value) {
-				items = append(items, fmt.Sprintf("NETWORK,%s,%s", strings.ToUpper(item), outbound))
-			}
-		case "port":
-			for _, item := range splitCSV(value) {
-				items = append(items, fmt.Sprintf("DST-PORT,%s,%s", item, outbound))
-			}
-		}
-	}
-	items = append(items, "MATCH,"+target)
-	return items
-}
-
 func routeFinal(routing RoutingConfig) string {
 	mode := routingMode(routing.Mode)
 	if mode == "direct" {
@@ -1056,13 +845,6 @@ func routeFinal(routing RoutingConfig) string {
 		final = "direct"
 	}
 	return final
-}
-
-func mihomoTargetName(name string) string {
-	if name == "" || name == "direct" {
-		return "DIRECT"
-	}
-	return name
 }
 
 func sortedRoutingRules(rules []RoutingRule) []RoutingRule {

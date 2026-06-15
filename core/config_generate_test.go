@@ -12,7 +12,6 @@ func TestCurrentConfigGeneratesKernelConfig(t *testing.T) {
 		Inbounds:  cfg.Inbounds,
 		Outbounds: cfg.Outbounds,
 		Routing:   cfg.Routing,
-		Mihomo:    cfg.Mihomo,
 	})
 	if err != nil {
 		t.Fatalf("GenerateConfig returned error: %v", err)

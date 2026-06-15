@@ -1,6 +1,7 @@
 package core
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -15,6 +16,9 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"nodetoolsagent/internal/repository"
+	v2service "nodetoolsagent/internal/service"
 )
 
 type Node struct {
@@ -27,6 +31,8 @@ type Node struct {
 	Status        string `json:"status"`
 	LatencyMS     int64  `json:"latency_ms"`
 	LastError     string `json:"last_error,omitempty"`
+	Diagnosis     string `json:"diagnosis,omitempty"`
+	DiagnosisHint string `json:"diagnosis_hint,omitempty"`
 	UploadBytes   int64  `json:"upload_bytes"`
 	DownloadBytes int64  `json:"download_bytes"`
 	UpdatedAt     string `json:"updated_at"`
@@ -53,14 +59,34 @@ type Manager struct {
 	startedAt  time.Time
 	stopCh     chan struct{}
 
-	mu        sync.RWMutex
-	cfg       Config
-	inbounds  map[string]InboundConfig
-	outbounds map[string]OutboundConfig
-	rules     []RoutingRule
-	traffic   map[string]*Traffic
-	health    map[string]Health
+	mu            sync.RWMutex
+	cfg           Config
+	inbounds      map[string]InboundConfig
+	outbounds     map[string]OutboundConfig
+	rules         []RoutingRule
+	traffic       map[string]*Traffic
+	health        map[string]Health
+	subscriptions map[string]time.Time
 }
+
+type managerSnapshot struct {
+	kernel        Kernel
+	cfg           Config
+	inbounds      map[string]InboundConfig
+	outbounds     map[string]OutboundConfig
+	rules         []RoutingRule
+	traffic       map[string]*Traffic
+	health        map[string]Health
+	subscriptions map[string]time.Time
+}
+
+type ConfigHistoryEntry struct {
+	ID        int64  `json:"id"`
+	CreatedAt string `json:"created_at"`
+	Summary   string `json:"summary"`
+}
+
+const defaultConfigHistoryKeep = 100
 
 type Traffic struct {
 	UploadBytes   int64
@@ -81,6 +107,8 @@ type NodeTestResult struct {
 	Status    string `json:"status"`
 	LatencyMS int64  `json:"latency_ms"`
 	Error     string `json:"error,omitempty"`
+	Diagnosis string `json:"diagnosis,omitempty"`
+	Hint      string `json:"hint,omitempty"`
 	UpdatedAt string `json:"updated_at"`
 }
 
@@ -89,27 +117,176 @@ type SubscriptionUpdateResult struct {
 	URL           string   `json:"url"`
 	Parsed        int      `json:"parsed"`
 	Imported      int      `json:"imported"`
+	Added         int      `json:"added"`
+	Updated       int      `json:"updated"`
+	Unchanged     int      `json:"unchanged"`
 	ImportedNodes []string `json:"imported_nodes,omitempty"`
 	Errors        []string `json:"errors,omitempty"`
+	Warnings      []string `json:"warnings,omitempty"`
+}
+
+type ImportOutboundDetail struct {
+	Name          string   `json:"name"`
+	OriginalName  string   `json:"original_name,omitempty"`
+	Protocol      string   `json:"protocol"`
+	Address       string   `json:"address"`
+	Port          int      `json:"port"`
+	Action        string   `json:"action"`
+	PreservedName bool     `json:"preserved_name,omitempty"`
+	Warnings      []string `json:"warnings,omitempty"`
+}
+
+type ImportOutboundsReport struct {
+	Imported  []Node                 `json:"imported"`
+	Parsed    int                    `json:"parsed"`
+	Added     int                    `json:"added"`
+	Updated   int                    `json:"updated"`
+	Unchanged int                    `json:"unchanged"`
+	Details   []ImportOutboundDetail `json:"details,omitempty"`
+}
+
+type ImportOutboundsOptions struct {
+	Provider         ProxyProviderConfig
+	FromSubscription bool
+}
+
+type RoutingPreviewRequest struct {
+	Inbound  string `json:"inbound"`
+	Target   string `json:"target"`
+	Protocol string `json:"protocol"`
+	Port     int    `json:"port"`
+}
+
+type RoutingPreviewResult struct {
+	Mode        string   `json:"mode"`
+	Inbound     string   `json:"inbound,omitempty"`
+	Target      string   `json:"target,omitempty"`
+	Protocol    string   `json:"protocol,omitempty"`
+	Port        int      `json:"port,omitempty"`
+	Outbound    string   `json:"outbound"`
+	Reason      string   `json:"reason"`
+	MatchedRule string   `json:"matched_rule,omitempty"`
+	MatchType   string   `json:"match_type,omitempty"`
+	Value       string   `json:"value,omitempty"`
+	Priority    int      `json:"priority,omitempty"`
+	Warnings    []string `json:"warnings,omitempty"`
+}
+
+type OutboundInspection struct {
+	Name     string            `json:"name"`
+	Protocol string            `json:"protocol"`
+	Saved    map[string]string `json:"saved"`
+	Raw      map[string]string `json:"raw,omitempty"`
+	Missing  []string          `json:"missing,omitempty"`
+	Warnings []string          `json:"warnings,omitempty"`
 }
 
 func NewManager(db *sql.DB, configPath string) *Manager {
 	return &Manager{
-		db:         db,
-		kernel:     NewPlaceholderKernel(),
-		configPath: configPath,
-		startedAt:  time.Now(),
-		stopCh:     make(chan struct{}),
-		inbounds:   map[string]InboundConfig{},
-		outbounds:  map[string]OutboundConfig{},
-		traffic:    map[string]*Traffic{},
-		health:     map[string]Health{},
+		db:            db,
+		kernel:        NewPlaceholderKernel(),
+		configPath:    configPath,
+		startedAt:     time.Now(),
+		stopCh:        make(chan struct{}),
+		inbounds:      map[string]InboundConfig{},
+		outbounds:     map[string]OutboundConfig{},
+		traffic:       map[string]*Traffic{},
+		health:        map[string]Health{},
+		subscriptions: map[string]time.Time{},
 	}
+}
+
+func cloneConfig(cfg Config) Config {
+	next := cfg
+	next.Entries = append([]EntryConfig(nil), cfg.Entries...)
+	next.Subscriptions = append([]SubscriptionConfig(nil), cfg.Subscriptions...)
+	next.Nodes = append([]OutboundNodeConfig(nil), cfg.Nodes...)
+	next.RegionGroups = append([]RegionGroupConfig(nil), cfg.RegionGroups...)
+	next.AppPolicyGroups = append([]AppPolicyGroupConfig(nil), cfg.AppPolicyGroups...)
+	next.RouteRules = append([]RouteRuleConfig(nil), cfg.RouteRules...)
+	next.RuleSets = append([]RuleSetConfig(nil), cfg.RuleSets...)
+	next.Inbounds = append([]InboundConfig(nil), cfg.Inbounds...)
+	next.Outbounds = append([]OutboundConfig(nil), cfg.Outbounds...)
+	next.Routing.Rules = append([]RoutingRule(nil), cfg.Routing.Rules...)
+	next.Routing.RuleSets = append([]RuleSetConfig(nil), cfg.Routing.RuleSets...)
+	next.Mihomo.Rules = append([]string(nil), cfg.Mihomo.Rules...)
+	next.Mihomo.Providers = append([]ProxyProviderConfig(nil), cfg.Mihomo.Providers...)
+	next.Mihomo.ProxyGroups = make([]ProxyGroupConfig, len(cfg.Mihomo.ProxyGroups))
+	for i, group := range cfg.Mihomo.ProxyGroups {
+		next.Mihomo.ProxyGroups[i] = group
+		next.Mihomo.ProxyGroups[i].Proxies = append([]string(nil), group.Proxies...)
+		next.Mihomo.ProxyGroups[i].Use = append([]string(nil), group.Use...)
+	}
+	return next
+}
+
+func (m *Manager) snapshotLocked() managerSnapshot {
+	inbounds := make(map[string]InboundConfig, len(m.inbounds))
+	for name, item := range m.inbounds {
+		inbounds[name] = item
+	}
+	outbounds := make(map[string]OutboundConfig, len(m.outbounds))
+	for name, item := range m.outbounds {
+		outbounds[name] = item
+	}
+	traffic := make(map[string]*Traffic, len(m.traffic))
+	for name, item := range m.traffic {
+		if item == nil {
+			continue
+		}
+		next := *item
+		traffic[name] = &next
+	}
+	health := make(map[string]Health, len(m.health))
+	for name, item := range m.health {
+		health[name] = item
+	}
+	subscriptions := make(map[string]time.Time, len(m.subscriptions))
+	for name, item := range m.subscriptions {
+		subscriptions[name] = item
+	}
+	return managerSnapshot{
+		kernel:        m.kernel,
+		cfg:           cloneConfig(m.cfg),
+		inbounds:      inbounds,
+		outbounds:     outbounds,
+		rules:         append([]RoutingRule(nil), m.rules...),
+		traffic:       traffic,
+		health:        health,
+		subscriptions: subscriptions,
+	}
+}
+
+func (m *Manager) restoreLocked(snapshot managerSnapshot) {
+	m.kernel = snapshot.kernel
+	m.cfg = cloneConfig(snapshot.cfg)
+	m.inbounds = snapshot.inbounds
+	m.outbounds = snapshot.outbounds
+	m.rules = append([]RoutingRule(nil), snapshot.rules...)
+	m.traffic = snapshot.traffic
+	m.health = snapshot.health
+	m.subscriptions = snapshot.subscriptions
+}
+
+func (m *Manager) commitWithRollbackLocked(snapshot managerSnapshot) error {
+	if err := m.commitLocked(); err != nil {
+		m.restoreLocked(snapshot)
+		if rollbackErr := m.applyKernelLocked(); rollbackErr != nil {
+			log.Printf("rollback kernel apply failed: %v", rollbackErr)
+			return fmt.Errorf("%w; rollback failed: %v", err, rollbackErr)
+		}
+		return err
+	}
+	return nil
 }
 
 func (m *Manager) ApplyConfig(cfg Config) error {
 	for i := range cfg.Outbounds {
 		cfg.Outbounds[i] = enrichOutboundFromRaw(cfg.Outbounds[i])
+	}
+	cfg.Kernel = normalizeKernelConfig(cfg.Kernel)
+	if HasV2Config(cfg) {
+		cfg = NormalizeV2Config(cfg)
 	}
 	if err := cfg.Validate(); err != nil {
 		return err
@@ -117,6 +294,7 @@ func (m *Manager) ApplyConfig(cfg Config) error {
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	snapshot := m.snapshotLocked()
 
 	m.cfg = cfg
 	m.inbounds = map[string]InboundConfig{}
@@ -132,19 +310,11 @@ func (m *Manager) ApplyConfig(cfg Config) error {
 		m.ensureHealthLocked(outbound.Name, outbound.Disabled)
 	}
 	m.rules = append([]RoutingRule(nil), cfg.Routing.Rules...)
-	if m.kernel == nil || m.kernel.Name() != kernelName(cfg.Kernel) {
-		m.kernel = NewKernel(cfg.Kernel)
-	} else {
-		m.kernel.Configure(cfg.Kernel)
-	}
-
-	if err := m.persistConfigLocked(cfg); err != nil {
+	if err := m.configureKernelLocked(cfg.Kernel); err != nil {
+		m.restoreLocked(snapshot)
 		return err
 	}
-	if err := m.persistRuntimeLocked(); err != nil {
-		return err
-	}
-	if err := m.applyKernelLocked(); err != nil {
+	if err := m.commitWithRollbackLocked(snapshot); err != nil {
 		return err
 	}
 	InitInbounds(cfg.Inbounds)
@@ -222,6 +392,7 @@ func (m *Manager) ListNodes() []Node {
 		inbound := m.inbounds[name]
 		traffic := m.traffic[inbound.Name]
 		health := m.health[inbound.Name]
+		diagnosis, hint := diagnoseHealth(health)
 		nodes = append(nodes, Node{
 			Name:          inbound.Name,
 			Type:          "inbound",
@@ -232,6 +403,8 @@ func (m *Manager) ListNodes() []Node {
 			Status:        health.Status,
 			LatencyMS:     health.LatencyMS,
 			LastError:     health.LastError,
+			Diagnosis:     diagnosis,
+			DiagnosisHint: hint,
 			UploadBytes:   traffic.UploadBytes,
 			DownloadBytes: traffic.DownloadBytes,
 			UpdatedAt:     traffic.UpdatedAt.Format(time.RFC3339),
@@ -246,6 +419,7 @@ func (m *Manager) ListNodes() []Node {
 		outbound := m.outbounds[name]
 		traffic := m.traffic[outbound.Name]
 		health := m.health[outbound.Name]
+		diagnosis, hint := diagnoseHealth(health)
 		nodes = append(nodes, Node{
 			Name:          outbound.Name,
 			Type:          "outbound",
@@ -256,6 +430,8 @@ func (m *Manager) ListNodes() []Node {
 			Status:        health.Status,
 			LatencyMS:     health.LatencyMS,
 			LastError:     health.LastError,
+			Diagnosis:     diagnosis,
+			DiagnosisHint: hint,
 			UploadBytes:   traffic.UploadBytes,
 			DownloadBytes: traffic.DownloadBytes,
 			UpdatedAt:     traffic.UpdatedAt.Format(time.RFC3339),
@@ -295,6 +471,287 @@ func (m *Manager) ConfigSnapshot() Config {
 	return m.cfg
 }
 
+func (m *Manager) V2ModelSnapshot() V2Model {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return V2ModelFromConfig(m.cfg)
+}
+
+func (m *Manager) GeneratedV2SingBoxConfig() (map[string]any, error) {
+	m.mu.RLock()
+	cfg := cloneConfig(m.cfg)
+	m.mu.RUnlock()
+	state, err := CompileV2Runtime(cfg)
+	if err != nil {
+		return nil, err
+	}
+	data, err := NewSingBoxKernel().GenerateConfig(state)
+	if err != nil {
+		return nil, err
+	}
+	return marshalV2GeneratedConfig(data)
+}
+
+func (m *Manager) UpsertV2Entry(entry EntryConfig) (EntryConfig, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	snapshot := m.snapshotLocked()
+	model := V2ModelFromConfig(m.cfg)
+	next, saved, err := v2service.NewV2ModelService().UpsertEntry(model, entry)
+	if err != nil {
+		return EntryConfig{}, err
+	}
+	m.applyV2ModelToConfigLocked(next)
+	m.cfg.Inbounds = upsertInboundConfig(m.cfg.Inbounds, v2EntryToInbound(saved))
+	if err := m.commitWithRollbackLocked(snapshot); err != nil {
+		return EntryConfig{}, err
+	}
+	return saved, nil
+}
+
+func (m *Manager) DeleteV2Entry(id string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	snapshot := m.snapshotLocked()
+	model := V2ModelFromConfig(m.cfg)
+	next, err := v2service.NewV2ModelService().DeleteEntry(model, id)
+	if err != nil {
+		return err
+	}
+	m.applyV2ModelToConfigLocked(next)
+	delete(m.inbounds, id)
+	m.cfg.Inbounds = deleteInboundConfig(m.cfg.Inbounds, id)
+	if err := m.commitWithRollbackLocked(snapshot); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (m *Manager) UpsertV2Subscription(sub SubscriptionConfig) (SubscriptionConfig, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	snapshot := m.snapshotLocked()
+	model := V2ModelFromConfig(m.cfg)
+	next, saved, err := v2service.NewV2ModelService().UpsertSubscription(model, sub)
+	if err != nil {
+		return SubscriptionConfig{}, err
+	}
+	m.applyV2ModelToConfigLocked(next)
+	if err := m.commitWithRollbackLocked(snapshot); err != nil {
+		return SubscriptionConfig{}, err
+	}
+	return saved, nil
+}
+
+func (m *Manager) DeleteV2Subscription(id string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	snapshot := m.snapshotLocked()
+	model := V2ModelFromConfig(m.cfg)
+	next, err := v2service.NewV2ModelService().DeleteSubscription(model, id)
+	if err != nil {
+		return err
+	}
+	m.applyV2ModelToConfigLocked(next)
+	if err := m.commitWithRollbackLocked(snapshot); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (m *Manager) UpsertV2Node(node OutboundNodeConfig) (OutboundNodeConfig, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	snapshot := m.snapshotLocked()
+	model := V2ModelFromConfig(m.cfg)
+	next, saved, err := v2service.NewV2ModelService().UpsertNode(model, node)
+	if err != nil {
+		return OutboundNodeConfig{}, err
+	}
+	m.applyV2ModelToConfigLocked(next)
+	m.cfg.Outbounds = upsertOutboundConfig(m.cfg.Outbounds, v2NodeToOutbound(saved))
+	if err := m.commitWithRollbackLocked(snapshot); err != nil {
+		return OutboundNodeConfig{}, err
+	}
+	return saved, nil
+}
+
+func (m *Manager) ImportV2NodesFromOutbounds(outbounds []OutboundConfig) ([]OutboundNodeConfig, error) {
+	nodes := make([]OutboundNodeConfig, 0, len(outbounds))
+	for _, outbound := range outbounds {
+		outbound = enrichOutboundFromRaw(outbound)
+		if outbound.Name == "" {
+			outbound.Name = outbound.Protocol + "-" + outbound.Address
+		}
+		nodes = append(nodes, outboundToV2Node(outbound, "manual", ""))
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	snapshot := m.snapshotLocked()
+	model := V2ModelFromConfig(m.cfg)
+	next, imported, err := v2service.NewV2ModelService().ImportNodes(model, nodes)
+	if err != nil {
+		return nil, err
+	}
+	m.applyV2ModelToConfigLocked(next)
+	for _, node := range imported {
+		m.cfg.Outbounds = upsertOutboundConfig(m.cfg.Outbounds, v2NodeToOutbound(node))
+	}
+	if err := m.commitWithRollbackLocked(snapshot); err != nil {
+		return nil, err
+	}
+	return imported, nil
+}
+
+func (m *Manager) DeleteV2Node(id string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	snapshot := m.snapshotLocked()
+	model := V2ModelFromConfig(m.cfg)
+	next, err := v2service.NewV2ModelService().DeleteNode(model, id)
+	if err != nil {
+		return err
+	}
+	m.applyV2ModelToConfigLocked(next)
+	delete(m.outbounds, id)
+	m.cfg.Outbounds = deleteV2NodeOutboundConfig(m.cfg.Outbounds, id)
+	if err := m.commitWithRollbackLocked(snapshot); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (m *Manager) SetV2NodeEnabled(id string, enabled bool) (OutboundNodeConfig, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	snapshot := m.snapshotLocked()
+	model := V2ModelFromConfig(m.cfg)
+	next, node, err := v2service.NewV2ModelService().SetNodeEnabled(model, id, enabled)
+	if err != nil {
+		return OutboundNodeConfig{}, err
+	}
+	m.applyV2ModelToConfigLocked(next)
+	outbound := v2NodeToOutbound(node)
+	outbound.Disabled = !enabled
+	m.cfg.Outbounds = upsertOutboundConfig(m.cfg.Outbounds, outbound)
+	if err := m.commitWithRollbackLocked(snapshot); err != nil {
+		return OutboundNodeConfig{}, err
+	}
+	return node, nil
+}
+
+func (m *Manager) UpsertV2RegionGroup(group RegionGroupConfig) (RegionGroupConfig, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	snapshot := m.snapshotLocked()
+	model := V2ModelFromConfig(m.cfg)
+	next, saved, err := v2service.NewV2ModelService().UpsertRegionGroup(model, group)
+	if err != nil {
+		return RegionGroupConfig{}, err
+	}
+	m.applyV2ModelToConfigLocked(next)
+	if err := m.commitWithRollbackLocked(snapshot); err != nil {
+		return RegionGroupConfig{}, err
+	}
+	return saved, nil
+}
+
+func (m *Manager) DeleteV2RegionGroup(id string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	snapshot := m.snapshotLocked()
+	model := V2ModelFromConfig(m.cfg)
+	next, err := v2service.NewV2ModelService().DeleteRegionGroup(model, id)
+	if err != nil {
+		return err
+	}
+	m.applyV2ModelToConfigLocked(next)
+	if err := m.commitWithRollbackLocked(snapshot); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (m *Manager) UpsertV2PolicyGroup(policy AppPolicyGroupConfig) (AppPolicyGroupConfig, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	snapshot := m.snapshotLocked()
+	model := V2ModelFromConfig(m.cfg)
+	next, saved, err := v2service.NewV2ModelService().UpsertPolicyGroup(model, policy)
+	if err != nil {
+		return AppPolicyGroupConfig{}, err
+	}
+	m.applyV2ModelToConfigLocked(next)
+	if err := m.commitWithRollbackLocked(snapshot); err != nil {
+		return AppPolicyGroupConfig{}, err
+	}
+	return saved, nil
+}
+
+func (m *Manager) DeleteV2PolicyGroup(id string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	snapshot := m.snapshotLocked()
+	model := V2ModelFromConfig(m.cfg)
+	next, err := v2service.NewV2ModelService().DeletePolicyGroup(model, id)
+	if err != nil {
+		return err
+	}
+	m.applyV2ModelToConfigLocked(next)
+	if err := m.commitWithRollbackLocked(snapshot); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (m *Manager) UpsertV2RouteRule(rule RouteRuleConfig) (RouteRuleConfig, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	snapshot := m.snapshotLocked()
+	model := V2ModelFromConfig(m.cfg)
+	next, saved, err := v2service.NewV2ModelService().UpsertRouteRule(model, rule)
+	if err != nil {
+		return RouteRuleConfig{}, err
+	}
+	m.applyV2ModelToConfigLocked(next)
+	if err := m.commitWithRollbackLocked(snapshot); err != nil {
+		return RouteRuleConfig{}, err
+	}
+	return saved, nil
+}
+
+func (m *Manager) ReplaceV2RouteRules(rules []RouteRuleConfig) ([]RouteRuleConfig, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	snapshot := m.snapshotLocked()
+	model := V2ModelFromConfig(m.cfg)
+	next, err := v2service.NewV2ModelService().ReplaceRouteRules(model, rules)
+	if err != nil {
+		return nil, err
+	}
+	m.applyV2ModelToConfigLocked(next)
+	if err := m.commitWithRollbackLocked(snapshot); err != nil {
+		return nil, err
+	}
+	return next.RouteRules, nil
+}
+
+func (m *Manager) DeleteV2RouteRule(id string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	snapshot := m.snapshotLocked()
+	model := V2ModelFromConfig(m.cfg)
+	next, err := v2service.NewV2ModelService().DeleteRouteRule(model, id)
+	if err != nil {
+		return err
+	}
+	m.applyV2ModelToConfigLocked(next)
+	if err := m.commitWithRollbackLocked(snapshot); err != nil {
+		return err
+	}
+	return nil
+}
+
 func (m *Manager) ReloadKernel() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -318,18 +775,28 @@ func (m *Manager) UpdateKernelConfig(cfg KernelConfig) error {
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	snapshot := m.snapshotLocked()
+	if err := m.configureKernelLocked(cfg); err != nil {
+		return err
+	}
+	m.cfg.Kernel = cfg
+	return m.commitWithRollbackLocked(snapshot)
+}
+
+func (m *Manager) configureKernelLocked(cfg KernelConfig) error {
 	if m.kernel != nil && m.kernel.Name() != kernelName(cfg) {
 		if err := m.kernel.Stop(); err != nil {
 			return err
 		}
 		m.kernel = NewKernel(cfg)
-	} else if m.kernel == nil {
-		m.kernel = NewKernel(cfg)
-	} else {
-		m.kernel.Configure(cfg)
+		return nil
 	}
-	m.cfg.Kernel = cfg
-	return m.commitLocked()
+	if m.kernel == nil {
+		m.kernel = NewKernel(cfg)
+		return nil
+	}
+	m.kernel.Configure(cfg)
+	return nil
 }
 
 func normalizeKernelConfig(cfg KernelConfig) KernelConfig {
@@ -348,12 +815,9 @@ func normalizeKernelConfig(cfg KernelConfig) KernelConfig {
 			cfg.ConfigPath = "sing-box.generated.json"
 		}
 	case "mihomo":
-		if cfg.Executable == "" || cfg.Executable == "/usr/local/bin/sing-box" {
-			cfg.Executable = "/usr/local/bin/mihomo"
-		}
-		if cfg.ConfigPath == "" || cfg.ConfigPath == "kernel.generated.json" || cfg.ConfigPath == "sing-box.generated.json" {
-			cfg.ConfigPath = "mihomo.generated.yaml"
-		}
+		cfg.Type = "sing-box"
+		cfg.Executable = "/usr/local/bin/sing-box"
+		cfg.ConfigPath = "sing-box.generated.json"
 	}
 	return cfg
 }
@@ -361,8 +825,10 @@ func normalizeKernelConfig(cfg KernelConfig) KernelConfig {
 func (m *Manager) UpdateMihomoConfig(cfg MihomoConfig) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.cfg.Mihomo = cfg
-	return m.commitLocked()
+	snapshot := m.snapshotLocked()
+	m.cfg.Subscriptions = normalizeSubscriptions(m.cfg.Subscriptions, cfg.Providers)
+	m.cfg.Mihomo = MihomoConfig{}
+	return m.commitWithRollbackLocked(snapshot)
 }
 
 func (m *Manager) CreateProxy(req ProxyCreateRequest) (Node, error) {
@@ -381,6 +847,7 @@ func (m *Manager) CreateProxy(req ProxyCreateRequest) (Node, error) {
 	if _, exists := m.inbounds[req.Name]; exists {
 		return Node{}, fmt.Errorf("inbound %q already exists", req.Name)
 	}
+	snapshot := m.snapshotLocked()
 
 	inbound := InboundConfig{
 		Name:                   req.Name,
@@ -421,7 +888,7 @@ func (m *Manager) CreateProxy(req ProxyCreateRequest) (Node, error) {
 	m.cfg.Inbounds = append(m.cfg.Inbounds, inbound)
 	m.ensureTrafficLocked(req.Name)
 	m.ensureHealthLocked(req.Name, inbound.Disabled)
-	if err := m.commitLocked(); err != nil {
+	if err := m.commitWithRollbackLocked(snapshot); err != nil {
 		return Node{}, err
 	}
 	return m.nodeLocked(req.Name, "inbound"), nil
@@ -452,6 +919,7 @@ func (m *Manager) CreateForward(req ForwardCreateRequest) (Node, error) {
 	if _, exists := m.inbounds[req.Name]; exists {
 		return Node{}, fmt.Errorf("inbound %q already exists", req.Name)
 	}
+	snapshot := m.snapshotLocked()
 
 	inbound := InboundConfig{
 		Name:       req.Name,
@@ -471,7 +939,7 @@ func (m *Manager) CreateForward(req ForwardCreateRequest) (Node, error) {
 	m.cfg.Routing.Rules = append(m.cfg.Routing.Rules, rule)
 	m.ensureTrafficLocked(inbound.Name)
 	m.ensureHealthLocked(inbound.Name, inbound.Disabled)
-	if err := m.commitLocked(); err != nil {
+	if err := m.commitWithRollbackLocked(snapshot); err != nil {
 		return Node{}, err
 	}
 	return m.nodeLocked(inbound.Name, "inbound"), nil
@@ -496,11 +964,12 @@ func (m *Manager) UpsertInbound(inbound InboundConfig) (Node, error) {
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	snapshot := m.snapshotLocked()
 	m.inbounds[inbound.Name] = inbound
 	m.cfg.Inbounds = upsertInboundConfig(m.cfg.Inbounds, inbound)
 	m.ensureTrafficLocked(inbound.Name)
 	m.ensureHealthLocked(inbound.Name, inbound.Disabled)
-	if err := m.commitLocked(); err != nil {
+	if err := m.commitWithRollbackLocked(snapshot); err != nil {
 		return Node{}, err
 	}
 	return m.nodeLocked(inbound.Name, "inbound"), nil
@@ -524,6 +993,7 @@ func (m *Manager) UpsertOutbound(outbound OutboundConfig) (Node, error) {
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	snapshot := m.snapshotLocked()
 	if originalName != "" && originalName != outbound.Name {
 		if _, ok := m.outbounds[originalName]; !ok {
 			return Node{}, fmt.Errorf("outbound %q does not exist", originalName)
@@ -551,57 +1021,110 @@ func (m *Manager) UpsertOutbound(outbound OutboundConfig) (Node, error) {
 	m.cfg.Outbounds = upsertOutboundConfig(m.cfg.Outbounds, outbound)
 	m.ensureTrafficLocked(outbound.Name)
 	m.ensureHealthLocked(outbound.Name, outbound.Disabled)
-	if err := m.commitLocked(); err != nil {
+	if err := m.commitWithRollbackLocked(snapshot); err != nil {
 		return Node{}, err
 	}
 	return m.nodeLocked(outbound.Name, "outbound"), nil
 }
 
 func (m *Manager) ImportOutbounds(outbounds []OutboundConfig) ([]Node, error) {
+	report, err := m.ImportOutboundsReport(outbounds)
+	if err != nil {
+		return nil, err
+	}
+	return report.Imported, nil
+}
+
+func (m *Manager) ImportOutboundsReport(outbounds []OutboundConfig) (ImportOutboundsReport, error) {
+	return m.ImportOutboundsReportWithOptions(outbounds, ImportOutboundsOptions{})
+}
+
+func (m *Manager) ImportOutboundsReportWithOptions(outbounds []OutboundConfig, options ImportOutboundsOptions) (ImportOutboundsReport, error) {
 	if len(outbounds) == 0 {
-		return nil, fmt.Errorf("no outbounds to import")
+		return ImportOutboundsReport{}, fmt.Errorf("no outbounds to import")
 	}
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	imported := make([]Node, 0, len(outbounds))
+	snapshot := m.snapshotLocked()
+	report := ImportOutboundsReport{
+		Parsed:   len(outbounds),
+		Imported: make([]Node, 0, len(outbounds)),
+		Details:  make([]ImportOutboundDetail, 0, len(outbounds)),
+	}
 	for _, outbound := range outbounds {
+		outbound = enrichOutboundFromRaw(outbound)
+		outbound = applyProviderImportOptions(outbound, options.Provider, options.FromSubscription)
+		originalName := outbound.Name
+		action := "added"
+		preservedName := false
 		if outbound.Name == "" {
 			outbound.Name = outbound.Protocol + "-" + outbound.Address
 		}
-		if existing := m.findEquivalentOutboundLocked(outbound); existing != "" {
+		if existing := m.findMatchingOutboundLocked(outbound, options.Provider); existing != "" {
+			action = "updated"
+			if existingConfig, ok := m.outbounds[existing]; ok && outboundConfigEquivalent(existingConfig, outbound) {
+				action = "unchanged"
+			}
+			preservedName = existing != originalName
+			if existingConfig, ok := m.outbounds[existing]; ok && shouldPreserveUserFields(options.Provider, options.FromSubscription) {
+				outbound = mergePreservedOutboundFields(existingConfig, outbound, options.Provider.PreserveFields)
+			}
 			outbound.Name = existing
 		} else {
 			outbound.Name = m.uniqueOutboundNameLocked(outbound.Name)
 		}
 		if outbound.Protocol == "" {
-			return nil, fmt.Errorf("protocol is required for %q", outbound.Name)
+			return ImportOutboundsReport{}, fmt.Errorf("protocol is required for %q", outbound.Name)
 		}
 		if outbound.Address == "" {
-			return nil, fmt.Errorf("address is required for %q", outbound.Name)
+			return ImportOutboundsReport{}, fmt.Errorf("address is required for %q", outbound.Name)
 		}
 		if outbound.Port < 1 || outbound.Port > 65535 {
-			return nil, fmt.Errorf("valid port is required for %q", outbound.Name)
+			return ImportOutboundsReport{}, fmt.Errorf("valid port is required for %q", outbound.Name)
 		}
 		if err := outbound.Validate(); err != nil {
-			return nil, err
+			return ImportOutboundsReport{}, err
 		}
 		m.outbounds[outbound.Name] = outbound
 		m.cfg.Outbounds = upsertOutboundConfig(m.cfg.Outbounds, outbound)
 		m.ensureTrafficLocked(outbound.Name)
 		m.ensureHealthLocked(outbound.Name, outbound.Disabled)
-		imported = append(imported, m.nodeLocked(outbound.Name, "outbound"))
+		report.Imported = append(report.Imported, m.nodeLocked(outbound.Name, "outbound"))
+		switch action {
+		case "added":
+			report.Added++
+		case "updated":
+			report.Updated++
+		case "unchanged":
+			report.Unchanged++
+		}
+		report.Details = append(report.Details, ImportOutboundDetail{
+			Name:          outbound.Name,
+			OriginalName:  originalName,
+			Protocol:      outbound.Protocol,
+			Address:       outbound.Address,
+			Port:          outbound.Port,
+			Action:        action,
+			PreservedName: preservedName,
+			Warnings:      outboundImportWarnings(outbound),
+		})
 	}
-	if err := m.commitLocked(); err != nil {
-		return nil, err
+	if err := m.commitWithRollbackLocked(snapshot); err != nil {
+		return ImportOutboundsReport{}, err
 	}
-	return imported, nil
+	return report, nil
 }
 
 func (m *Manager) UpdateSubscriptions() ([]SubscriptionUpdateResult, error) {
 	m.mu.RLock()
-	providers := append([]ProxyProviderConfig(nil), m.cfg.Mihomo.Providers...)
+	cfg := NormalizeV2Config(m.cfg)
+	providers := subscriptionProviders(cfg)
 	m.mu.RUnlock()
+	return m.updateSubscriptionsForProviders(providers)
+}
+
+func (m *Manager) updateSubscriptionsForProviders(providers []ProxyProviderConfig) ([]SubscriptionUpdateResult, error) {
 	if len(providers) == 0 {
 		return nil, fmt.Errorf("no subscription providers configured")
 	}
@@ -618,31 +1141,302 @@ func (m *Manager) UpdateSubscriptions() ([]SubscriptionUpdateResult, error) {
 			results = append(results, result)
 			continue
 		}
-		outbounds, parseErrors := ParseOutboundLinks(string(body))
+		outbounds, parseErrorDetails := ParseOutboundLinksDetailed(string(body))
 		result.Parsed = len(outbounds)
-		result.Errors = append(result.Errors, parseErrors...)
+		for _, detail := range parseErrorDetails {
+			result.Errors = append(result.Errors, detail.Error)
+		}
 		if len(outbounds) > 0 {
-			nodes, importErr := m.ImportOutbounds(outbounds)
+			report, importErr := m.ImportOutboundsReportWithOptions(outbounds, ImportOutboundsOptions{Provider: provider, FromSubscription: true})
 			if importErr != nil {
 				result.Errors = append(result.Errors, importErr.Error())
 			} else {
-				result.Imported = len(nodes)
-				for _, node := range nodes {
+				result.Imported = len(report.Imported)
+				result.Added = report.Added
+				result.Updated = report.Updated
+				result.Unchanged = report.Unchanged
+				for _, detail := range report.Details {
+					result.Warnings = append(result.Warnings, detail.Warnings...)
+				}
+				for _, node := range report.Imported {
 					result.ImportedNodes = append(result.ImportedNodes, node.Name)
 				}
 			}
 		}
+		m.markSubscriptionUpdated(provider.Name)
 		results = append(results, result)
 	}
 	return results, nil
 }
 
+func (m *Manager) StartSubscriptionUpdater() {
+	go func() {
+		ticker := time.NewTicker(time.Minute)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-m.stopCh:
+				return
+			case <-ticker.C:
+				providers := m.dueSubscriptionProviders()
+				if len(providers) == 0 {
+					continue
+				}
+				results, err := m.updateSubscriptionsForProviders(providers)
+				if err != nil {
+					log.Printf("subscription auto update failed: %v", err)
+					continue
+				}
+				for _, result := range results {
+					if len(result.Errors) > 0 {
+						log.Printf("subscription %s auto update finished with errors: %s", result.Provider, strings.Join(result.Errors, "; "))
+					} else {
+						log.Printf("subscription %s auto updated: parsed=%d imported=%d added=%d updated=%d unchanged=%d", result.Provider, result.Parsed, result.Imported, result.Added, result.Updated, result.Unchanged)
+					}
+				}
+			}
+		}
+	}()
+}
+
+func (m *Manager) dueSubscriptionProviders() []ProxyProviderConfig {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	now := time.Now()
+	cfg := NormalizeV2Config(m.cfg)
+	providers := make([]ProxyProviderConfig, 0, len(cfg.Subscriptions))
+	for _, provider := range subscriptionProviders(cfg) {
+		if provider.URL == "" {
+			continue
+		}
+		interval := provider.Interval
+		if interval <= 0 {
+			interval = 3600
+		}
+		last := m.subscriptions[provider.Name]
+		if last.IsZero() || now.Sub(last) >= time.Duration(interval)*time.Second {
+			providers = append(providers, provider)
+			m.subscriptions[provider.Name] = now
+		}
+	}
+	return providers
+}
+
+func (m *Manager) markSubscriptionUpdated(name string) {
+	if name == "" {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.subscriptions[name] = time.Now()
+}
+
 func (m *Manager) UpdateRoutingConfig(routing RoutingConfig) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	snapshot := m.snapshotLocked()
 	m.cfg.Routing = routing
 	m.rules = append([]RoutingRule(nil), routing.Rules...)
-	return m.commitLocked()
+	return m.commitWithRollbackLocked(snapshot)
+}
+
+func (m *Manager) PreviewRouting(req RoutingPreviewRequest) RoutingPreviewResult {
+	m.mu.RLock()
+	cfg := m.cfg
+	m.mu.RUnlock()
+
+	mode := routingMode(cfg.Routing.Mode)
+	if mode == "" {
+		mode = "rule"
+	}
+	defaultOutbound := firstNonEmpty(cfg.Routing.DefaultOutbound, "direct")
+	result := RoutingPreviewResult{
+		Mode:     mode,
+		Inbound:  req.Inbound,
+		Target:   req.Target,
+		Protocol: req.Protocol,
+		Port:     req.Port,
+		Outbound: defaultOutbound,
+	}
+	if mode == "direct" {
+		result.Outbound = "direct"
+		result.Reason = "全部直连模式，默认出站和规则都不会生效。"
+		return result
+	}
+	if mode == "global" {
+		result.Reason = "全局代理模式，所有流量都走默认出站。"
+		return result
+	}
+	if cfg.Kernel.Type == "sing-box" {
+		for _, rule := range cfg.Routing.Rules {
+			matchType := routingRuleMatchType(rule)
+			if !rule.Disabled && (matchType == "geoip" || matchType == "geosite") {
+				result.Warnings = append(result.Warnings, "当前 sing-box 生成器暂不写入 GeoIP/Geosite 规则；这类规则在 sing-box 下不会实际生效。")
+				break
+			}
+		}
+	}
+	for _, rule := range sortedRoutingRules(cfg.Routing.Rules) {
+		if rule.Disabled {
+			continue
+		}
+		if routingRuleMatches(rule, req) {
+			result.Outbound = rule.Outbound
+			result.MatchedRule = firstNonEmpty(rule.Name, fmt.Sprintf("%s-%d", routingRuleMatchType(rule), rule.Priority))
+			result.MatchType = routingRuleMatchType(rule)
+			result.Value = routingRuleValue(rule)
+			result.Priority = rule.Priority
+			result.Reason = "命中分流规则，按该规则选择出站。"
+			return result
+		}
+	}
+	result.Reason = "没有命中启用规则，走默认出站。"
+	return result
+}
+
+func routingRuleMatches(rule RoutingRule, req RoutingPreviewRequest) bool {
+	matchType := routingRuleMatchType(rule)
+	values := splitCSV(routingRuleValue(rule))
+	if len(values) == 0 {
+		return false
+	}
+	target := strings.ToLower(strings.TrimSpace(req.Target))
+	if host, _, err := net.SplitHostPort(target); err == nil {
+		target = host
+	}
+	switch matchType {
+	case "inbound":
+		for _, value := range values {
+			if value == req.Inbound {
+				return true
+			}
+		}
+	case "domain":
+		for _, value := range values {
+			if strings.EqualFold(strings.TrimSpace(value), target) {
+				return true
+			}
+		}
+	case "domain_suffix":
+		for _, value := range values {
+			suffix := strings.TrimPrefix(strings.ToLower(strings.TrimSpace(value)), ".")
+			if target == suffix || strings.HasSuffix(target, "."+suffix) {
+				return true
+			}
+		}
+	case "domain_keyword":
+		for _, value := range values {
+			if strings.Contains(target, strings.ToLower(strings.TrimSpace(value))) {
+				return true
+			}
+		}
+	case "ip_cidr":
+		ip := net.ParseIP(target)
+		if ip == nil {
+			return false
+		}
+		for _, value := range values {
+			_, cidr, err := net.ParseCIDR(value)
+			if err == nil && cidr.Contains(ip) {
+				return true
+			}
+		}
+	case "port":
+		for _, value := range splitInts(strings.Join(values, ",")) {
+			if value == req.Port {
+				return true
+			}
+		}
+	case "protocol":
+		for _, value := range values {
+			if strings.EqualFold(value, req.Protocol) {
+				return true
+			}
+		}
+	case "geosite":
+		for _, value := range values {
+			if strings.EqualFold(value, "cn") && (target == "cn" || strings.HasSuffix(target, ".cn")) {
+				return true
+			}
+		}
+	case "geoip":
+		ip := net.ParseIP(target)
+		for _, value := range values {
+			if strings.EqualFold(value, "cn") && ip != nil && isPrivateOrChinaPreviewIP(ip) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func isPrivateOrChinaPreviewIP(ip net.IP) bool {
+	return ip.IsPrivate() || ip.IsLoopback()
+}
+
+func (m *Manager) InspectOutbound(name string) (OutboundInspection, error) {
+	m.mu.RLock()
+	outbound, ok := m.outbounds[name]
+	m.mu.RUnlock()
+	if !ok {
+		return OutboundInspection{}, fmt.Errorf("outbound %q does not exist", name)
+	}
+	inspection := OutboundInspection{
+		Name:     outbound.Name,
+		Protocol: outbound.Protocol,
+		Saved:    outboundFieldMap(outbound),
+		Warnings: outboundImportWarnings(outbound),
+	}
+	if strings.Contains(outbound.Raw, "://") {
+		parsed, err := parseOutboundLink(outbound.Raw)
+		if err == nil {
+			inspection.Raw = outboundFieldMap(parsed)
+			for key, rawValue := range inspection.Raw {
+				if rawValue != "" && inspection.Saved[key] == "" {
+					inspection.Missing = append(inspection.Missing, key)
+				}
+			}
+		} else {
+			inspection.Warnings = append(inspection.Warnings, "原始链接无法重新解析: "+err.Error())
+		}
+	}
+	return inspection, nil
+}
+
+func outboundFieldMap(outbound OutboundConfig) map[string]string {
+	return map[string]string{
+		"name":             outbound.Name,
+		"protocol":         outbound.Protocol,
+		"address":          outbound.Address,
+		"port":             fmt.Sprintf("%d", outbound.Port),
+		"uuid":             outbound.UUID,
+		"password":         secretDisplay(outbound.Password),
+		"method":           outbound.Method,
+		"flow":             outbound.Flow,
+		"security":         outbound.Security,
+		"tls":              fmt.Sprintf("%t", outbound.TLS),
+		"server_name":      outbound.ServerName,
+		"skip_cert_verify": fmt.Sprintf("%t", outbound.SkipCertVerify),
+		"transport":        outbound.Transport,
+		"path":             outbound.Path,
+		"host":             outbound.Host,
+		"public_key":       outbound.PublicKey,
+		"short_id":         outbound.ShortID,
+		"fingerprint":      outbound.Fingerprint,
+		"alpn":             outbound.ALPN,
+		"obfs":             outbound.Obfs,
+		"obfs_password":    secretDisplay(outbound.ObfsPassword),
+		"mport":            outbound.MPort,
+		"congestion":       outbound.Congestion,
+		"udp_relay_mode":   outbound.UDPRelayMode,
+	}
+}
+
+func secretDisplay(value string) string {
+	if value == "" {
+		return ""
+	}
+	return "<已设置>"
 }
 
 func (m *Manager) DeleteNode(nodeType, name string) error {
@@ -652,6 +1446,7 @@ func (m *Manager) DeleteNode(nodeType, name string) error {
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	snapshot := m.snapshotLocked()
 	switch nodeType {
 	case "inbound":
 		if _, ok := m.inbounds[name]; !ok {
@@ -672,10 +1467,54 @@ func (m *Manager) DeleteNode(nodeType, name string) error {
 	default:
 		return fmt.Errorf("node type must be inbound or outbound")
 	}
-	if err := m.commitLocked(); err != nil {
+	if err := m.commitWithRollbackLocked(snapshot); err != nil {
 		return err
 	}
 	return nil
+}
+
+func (m *Manager) DeleteNodes(items []BatchNodeItem) (int, error) {
+	if len(items) == 0 {
+		return 0, fmt.Errorf("no nodes selected")
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	snapshot := m.snapshotLocked()
+	for _, item := range items {
+		if item.Name == "" {
+			return 0, fmt.Errorf("name is required")
+		}
+		switch item.Type {
+		case "inbound":
+			if _, ok := m.inbounds[item.Name]; !ok {
+				return 0, fmt.Errorf("inbound %q does not exist", item.Name)
+			}
+		case "outbound":
+			if _, ok := m.outbounds[item.Name]; !ok {
+				return 0, fmt.Errorf("outbound %q does not exist", item.Name)
+			}
+		default:
+			return 0, fmt.Errorf("node type must be inbound or outbound")
+		}
+	}
+	for _, item := range items {
+		switch item.Type {
+		case "inbound":
+			delete(m.inbounds, item.Name)
+			m.cfg.Inbounds = deleteInboundConfig(m.cfg.Inbounds, item.Name)
+			m.rules = deleteRulesForNode(m.rules, "inbound", item.Name)
+			m.cfg.Routing.Rules = deleteRulesForNode(m.cfg.Routing.Rules, "inbound", item.Name)
+		case "outbound":
+			delete(m.outbounds, item.Name)
+			m.cfg.Outbounds = deleteOutboundConfig(m.cfg.Outbounds, item.Name)
+			m.rules = deleteRulesForNode(m.rules, "outbound", item.Name)
+			m.cfg.Routing.Rules = deleteRulesForNode(m.cfg.Routing.Rules, "outbound", item.Name)
+		}
+	}
+	if err := m.commitWithRollbackLocked(snapshot); err != nil {
+		return 0, err
+	}
+	return len(items), nil
 }
 
 func (m *Manager) SetNodeEnabled(nodeType, name string, enabled bool) (Node, error) {
@@ -684,6 +1523,7 @@ func (m *Manager) SetNodeEnabled(nodeType, name string, enabled bool) (Node, err
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	snapshot := m.snapshotLocked()
 	switch nodeType {
 	case "inbound":
 		inbound, ok := m.inbounds[name]
@@ -705,10 +1545,59 @@ func (m *Manager) SetNodeEnabled(nodeType, name string, enabled bool) (Node, err
 		return Node{}, fmt.Errorf("node type must be inbound or outbound")
 	}
 	m.ensureHealthLocked(name, !enabled)
-	if err := m.commitLocked(); err != nil {
+	if err := m.commitWithRollbackLocked(snapshot); err != nil {
 		return Node{}, err
 	}
 	return m.nodeLocked(name, nodeType), nil
+}
+
+func (m *Manager) SetNodesEnabled(items []BatchNodeItem, enabled bool) ([]Node, error) {
+	if len(items) == 0 {
+		return nil, fmt.Errorf("no nodes selected")
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	snapshot := m.snapshotLocked()
+	for _, item := range items {
+		if item.Name == "" {
+			return nil, fmt.Errorf("name is required")
+		}
+		switch item.Type {
+		case "inbound":
+			if _, ok := m.inbounds[item.Name]; !ok {
+				return nil, fmt.Errorf("inbound %q does not exist", item.Name)
+			}
+		case "outbound":
+			if _, ok := m.outbounds[item.Name]; !ok {
+				return nil, fmt.Errorf("outbound %q does not exist", item.Name)
+			}
+		default:
+			return nil, fmt.Errorf("node type must be inbound or outbound")
+		}
+	}
+	for _, item := range items {
+		switch item.Type {
+		case "inbound":
+			inbound := m.inbounds[item.Name]
+			inbound.Disabled = !enabled
+			m.inbounds[item.Name] = inbound
+			m.cfg.Inbounds = upsertInboundConfig(m.cfg.Inbounds, inbound)
+		case "outbound":
+			outbound := m.outbounds[item.Name]
+			outbound.Disabled = !enabled
+			m.outbounds[item.Name] = outbound
+			m.cfg.Outbounds = upsertOutboundConfig(m.cfg.Outbounds, outbound)
+		}
+		m.ensureHealthLocked(item.Name, !enabled)
+	}
+	if err := m.commitWithRollbackLocked(snapshot); err != nil {
+		return nil, err
+	}
+	nodes := make([]Node, 0, len(items))
+	for _, item := range items {
+		nodes = append(nodes, m.nodeLocked(item.Name, item.Type))
+	}
+	return nodes, nil
 }
 
 func (m *Manager) TestNode(nodeType, name string) (NodeTestResult, error) {
@@ -737,12 +1626,15 @@ func (m *Manager) TestNode(nodeType, name string) (NodeTestResult, error) {
 	m.mu.Lock()
 	m.health[name] = health
 	m.mu.Unlock()
+	diagnosis, hint := diagnoseHealth(health)
 	return NodeTestResult{
 		Name:      name,
 		Type:      nodeType,
 		Status:    health.Status,
 		LatencyMS: health.LatencyMS,
 		Error:     health.LastError,
+		Diagnosis: diagnosis,
+		Hint:      hint,
 		UpdatedAt: health.UpdatedAt.Format(time.RFC3339),
 	}, nil
 }
@@ -1134,6 +2026,45 @@ func compactError(value string) string {
 	return value
 }
 
+func diagnoseHealth(health Health) (string, string) {
+	status := strings.ToLower(strings.TrimSpace(health.Status))
+	message := strings.ToLower(health.LastError)
+	if status == "" || status == "unknown" {
+		return "未测试", "点击测试按钮后会显示真实连通情况。"
+	}
+	if status == "online" {
+		return "正常", "链路测试通过。"
+	}
+	if status == "disabled" {
+		return "已停用", "节点已停用，不会写入运行配置。"
+	}
+	if strings.Contains(message, "field") || strings.Contains(message, "字段") || strings.Contains(message, "requires") || strings.Contains(message, "配置校验") || strings.Contains(message, "bad key") {
+		return "配置参数错误", "检查协议字段是否完整，尤其是 Reality public key、short id、flow、SNI、密码和加密方式。"
+	}
+	if strings.Contains(message, "reality") || strings.Contains(message, "utls") || strings.Contains(message, "public_key") || strings.Contains(message, "short_id") {
+		return "Reality 参数错误", "检查 pbk/public key、sid/short id、SNI、fingerprint 和 flow 是否与服务端一致。"
+	}
+	if strings.Contains(message, "tls handshake") || strings.Contains(message, "certificate") || strings.Contains(message, "x509") {
+		return "TLS 握手失败", "检查 SNI、证书、是否需要跳过证书校验，以及客户端是否支持该协议。"
+	}
+	if strings.Contains(message, "i/o timeout") || strings.Contains(message, "timeout") || strings.Contains(message, "deadline") {
+		return "连接超时", "检查节点端口、安全组、防火墙、目标节点是否在线，以及当前 VPS 到目标节点网络。"
+	}
+	if strings.Contains(message, "no such host") || strings.Contains(message, "dns") {
+		return "DNS 解析失败", "检查节点域名、VPS DNS 或订阅节点是否已经失效。"
+	}
+	if strings.Contains(message, "connection refused") || strings.Contains(message, "connect: refused") {
+		return "端口拒绝连接", "目标端口未监听，或节点服务没有启动。"
+	}
+	if strings.Contains(message, "http 状态异常") || strings.Contains(message, "http status") || strings.Contains(message, "http_") || strings.Contains(message, "502") {
+		return "上游返回异常", "代理链路连上了，但上游出口访问测试地址失败；优先测试该出站节点本身。"
+	}
+	if strings.Contains(message, "unsupported") || strings.Contains(message, "暂不支持") {
+		return "暂不支持自动测试", "该协议需要专用客户端握手，当前只能做配置校验或端口探测。"
+	}
+	return "测试失败", "查看详细错误，并优先单独测试出站节点。"
+}
+
 func probeTCP(address string, disabled bool) Health {
 	now := time.Now()
 	if disabled {
@@ -1170,8 +2101,101 @@ func (m *Manager) persistConfigLocked(cfg Config) error {
 	if err != nil {
 		return err
 	}
-	_, err = m.db.Exec(`INSERT INTO config_history (content, created_at) VALUES (?, ?)`, string(content), time.Now().Format(time.RFC3339))
+	if _, err = m.db.Exec(`INSERT INTO config_history (content, created_at) VALUES (?, ?)`, string(content), time.Now().Format(time.RFC3339)); err != nil {
+		return err
+	}
+	_, err = m.cleanupConfigHistory(defaultConfigHistoryKeep)
 	return err
+}
+
+func (m *Manager) ListConfigHistory(limit int) ([]ConfigHistoryEntry, error) {
+	if limit < 1 {
+		limit = 20
+	}
+	if limit > defaultConfigHistoryKeep {
+		limit = defaultConfigHistoryKeep
+	}
+	rows, err := m.db.Query(`SELECT id, content, created_at FROM config_history ORDER BY id DESC LIMIT ?`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	entries := []ConfigHistoryEntry{}
+	for rows.Next() {
+		var entry ConfigHistoryEntry
+		var content string
+		if err := rows.Scan(&entry.ID, &content, &entry.CreatedAt); err != nil {
+			return nil, err
+		}
+		entry.Summary = summarizeConfigHistory(content)
+		entries = append(entries, entry)
+	}
+	return entries, rows.Err()
+}
+
+func summarizeConfigHistory(content string) string {
+	var cfg Config
+	if err := json.Unmarshal([]byte(content), &cfg); err != nil {
+		return "无法解析历史配置"
+	}
+	kernelType := firstNonEmpty(cfg.Kernel.Type, "placeholder")
+	mode := firstNonEmpty(routingMode(cfg.Routing.Mode), "rule")
+	return fmt.Sprintf("%s / %s，入站 %d，出站 %d，规则 %d", kernelType, mode, len(cfg.Inbounds), len(cfg.Outbounds), len(cfg.Routing.Rules))
+}
+
+func (m *Manager) RestoreConfigHistory(id int64) error {
+	if id < 1 {
+		return fmt.Errorf("valid config history id is required")
+	}
+	var content string
+	if err := m.db.QueryRow(`SELECT content FROM config_history WHERE id = ?`, id).Scan(&content); err != nil {
+		if err == sql.ErrNoRows {
+			return fmt.Errorf("config history %d does not exist", id)
+		}
+		return err
+	}
+	var cfg Config
+	if err := json.Unmarshal([]byte(content), &cfg); err != nil {
+		return err
+	}
+	current := m.ConfigSnapshot()
+	cfg.Server.AdminUser = firstNonEmpty(cfg.Server.AdminUser, current.Server.AdminUser)
+	cfg.Server.AdminPass = current.Server.AdminPass
+	if cfg.Server.WebPort == 0 {
+		cfg.Server.WebPort = current.Server.WebPort
+	}
+	if cfg.Kernel.Type == "" {
+		cfg.Kernel.Type = "placeholder"
+	}
+	if cfg.Kernel.ConfigPath == "" {
+		cfg.Kernel.ConfigPath = "kernel.generated.json"
+	}
+	cfg.Routing = normalizeRoutingConfig(cfg.Routing)
+	return m.ApplyConfig(cfg)
+}
+
+func (m *Manager) CleanupConfigHistory(keep int) (int64, error) {
+	if keep < 1 {
+		return 0, fmt.Errorf("keep must be greater than 0")
+	}
+	if keep > 1000 {
+		keep = 1000
+	}
+	return m.cleanupConfigHistory(keep)
+}
+
+func (m *Manager) cleanupConfigHistory(keep int) (int64, error) {
+	result, err := m.db.Exec(
+		`DELETE FROM config_history
+		 WHERE id NOT IN (
+		   SELECT id FROM config_history ORDER BY id DESC LIMIT ?
+		 )`,
+		keep,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 func (m *Manager) saveConfigLocked() error {
@@ -1182,7 +2206,13 @@ func (m *Manager) saveConfigLocked() error {
 }
 
 func (m *Manager) commitLocked() error {
+	if HasV2Config(m.cfg) {
+		m.cfg = NormalizeV2Config(m.cfg)
+	}
 	if err := m.cfg.Validate(); err != nil {
+		return err
+	}
+	if err := m.applyKernelLocked(); err != nil {
 		return err
 	}
 	if err := m.saveConfigLocked(); err != nil {
@@ -1191,38 +2221,95 @@ func (m *Manager) commitLocked() error {
 	if err := m.persistConfigLocked(m.cfg); err != nil {
 		return err
 	}
+	if err := m.persistV2ModelLocked(m.cfg); err != nil {
+		return err
+	}
 	if err := m.persistRuntimeLocked(); err != nil {
 		return err
 	}
-	return m.applyKernelLocked()
+	return nil
+}
+
+func (m *Manager) persistV2ModelLocked(cfg Config) error {
+	if m.db == nil || !HasV2Config(cfg) {
+		return nil
+	}
+	return repository.NewV2Repository(m.db).SaveModel(context.Background(), V2ModelFromConfig(cfg))
 }
 
 func (m *Manager) applyKernelLocked() error {
-	inbounds, outbounds, routing := enabledRuntime(m.cfg.Inbounds, m.cfg.Outbounds, m.cfg.Routing)
+	var state RuntimeState
+	if HasV2Config(m.cfg) {
+		compiled, err := CompileV2Runtime(m.cfg)
+		if err != nil {
+			return err
+		}
+		state = compiled
+	} else {
+		inbounds, outbounds, routing := enabledRuntime(m.cfg.Inbounds, m.cfg.Outbounds, m.cfg.Routing)
+		state = RuntimeState{
+			Inbounds:  inbounds,
+			Outbounds: outbounds,
+			Routing:   routing,
+		}
+	}
 	var err error
-	inbounds, err = ensureInboundTLSAssets(inbounds)
+	state.Inbounds, err = ensureInboundTLSAssets(state.Inbounds)
 	if err != nil {
 		return err
-	}
-	state := RuntimeState{
-		Inbounds:  inbounds,
-		Outbounds: outbounds,
-		Routing:   routing,
-		Mihomo:    m.cfg.Mihomo,
 	}
 	data, err := m.kernel.GenerateConfig(state)
 	if err != nil {
 		return err
 	}
 	path := m.cfg.Kernel.ConfigPath
+	previousGenerated, hadPreviousGenerated, err := readGeneratedFile(path)
+	if err != nil {
+		return err
+	}
 	if err := saveGeneratedFile(path, data); err != nil {
 		return err
 	}
 	status := m.kernel.Status()
 	if status.Running {
-		return m.kernel.Reload(path)
+		if err := m.kernel.Reload(path); err != nil {
+			_ = restoreGeneratedFile(path, previousGenerated, hadPreviousGenerated)
+			return err
+		}
+		return nil
 	}
-	return m.kernel.Start(path)
+	if err := m.kernel.Start(path); err != nil {
+		_ = restoreGeneratedFile(path, previousGenerated, hadPreviousGenerated)
+		return err
+	}
+	return nil
+}
+
+func readGeneratedFile(path string) ([]byte, bool, error) {
+	if path == "" {
+		return nil, false, nil
+	}
+	data, err := os.ReadFile(path)
+	if err == nil {
+		return data, true, nil
+	}
+	if os.IsNotExist(err) {
+		return nil, false, nil
+	}
+	return nil, false, err
+}
+
+func restoreGeneratedFile(path string, data []byte, existed bool) error {
+	if path == "" {
+		return nil
+	}
+	if !existed {
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		return nil
+	}
+	return saveGeneratedFile(path, data)
 }
 
 func (m *Manager) persistRuntimeLocked() error {
@@ -1310,6 +2397,7 @@ func (m *Manager) ensureHealthLocked(name string, disabled bool) {
 
 func (m *Manager) nodeLocked(name string, nodeType string) Node {
 	traffic := m.traffic[name]
+	diagnosis, hint := diagnoseHealth(m.health[name])
 	if nodeType == "inbound" {
 		inbound := m.inbounds[name]
 		return Node{
@@ -1322,6 +2410,8 @@ func (m *Manager) nodeLocked(name string, nodeType string) Node {
 			Status:        m.health[name].Status,
 			LatencyMS:     m.health[name].LatencyMS,
 			LastError:     m.health[name].LastError,
+			Diagnosis:     diagnosis,
+			DiagnosisHint: hint,
 			UploadBytes:   traffic.UploadBytes,
 			DownloadBytes: traffic.DownloadBytes,
 			UpdatedAt:     traffic.UpdatedAt.Format(time.RFC3339),
@@ -1338,6 +2428,8 @@ func (m *Manager) nodeLocked(name string, nodeType string) Node {
 		Status:        m.health[name].Status,
 		LatencyMS:     m.health[name].LatencyMS,
 		LastError:     m.health[name].LastError,
+		Diagnosis:     diagnosis,
+		DiagnosisHint: hint,
 		UploadBytes:   traffic.UploadBytes,
 		DownloadBytes: traffic.DownloadBytes,
 		UpdatedAt:     traffic.UpdatedAt.Format(time.RFC3339),
@@ -1355,11 +2447,215 @@ func kernelName(cfg KernelConfig) string {
 	switch cfg.Type {
 	case "sing-box":
 		return "sing-box"
-	case "mihomo":
-		return "mihomo"
 	default:
 		return "placeholder"
 	}
+}
+
+func subscriptionProviders(cfg Config) []ProxyProviderConfig {
+	if len(cfg.Subscriptions) == 0 {
+		return append([]ProxyProviderConfig(nil), cfg.Mihomo.Providers...)
+	}
+	providers := make([]ProxyProviderConfig, 0, len(cfg.Subscriptions))
+	for _, sub := range cfg.Subscriptions {
+		if !sub.Enabled || sub.URL == "" {
+			continue
+		}
+		interval := sub.RefreshInterval
+		if interval == 0 {
+			interval = 3600
+		}
+		providers = append(providers, ProxyProviderConfig{
+			Name:     firstNonEmpty(sub.Name, sub.ID),
+			Type:     firstNonEmpty(sub.Type, "auto"),
+			URL:      sub.URL,
+			Interval: interval,
+		})
+	}
+	return providers
+}
+
+func (m *Manager) applyV2ModelToConfigLocked(model V2Model) {
+	m.cfg.ModelVersion = "v2"
+	m.cfg.Entries = append([]EntryConfig(nil), model.Entries...)
+	m.cfg.Subscriptions = append([]SubscriptionConfig(nil), model.Subscriptions...)
+	m.cfg.Nodes = append([]OutboundNodeConfig(nil), model.Nodes...)
+	m.cfg.RegionGroups = append([]RegionGroupConfig(nil), model.RegionGroups...)
+	m.cfg.AppPolicyGroups = append([]AppPolicyGroupConfig(nil), model.AppPolicyGroups...)
+	m.cfg.RouteRules = append([]RouteRuleConfig(nil), model.RouteRules...)
+	m.cfg.RuleSets = append([]RuleSetConfig(nil), model.RuleSets...)
+	m.cfg.Inbounds = make([]InboundConfig, 0, len(model.Entries))
+	m.inbounds = map[string]InboundConfig{}
+	for _, entry := range model.Entries {
+		inbound := v2EntryToInbound(entry)
+		m.cfg.Inbounds = append(m.cfg.Inbounds, inbound)
+		m.inbounds[inbound.Name] = inbound
+		m.ensureTrafficLocked(inbound.Name)
+		m.ensureHealthLocked(inbound.Name, inbound.Disabled)
+	}
+	m.cfg.Outbounds = make([]OutboundConfig, 0, len(model.Nodes))
+	m.outbounds = map[string]OutboundConfig{}
+	for _, node := range model.Nodes {
+		outbound := v2NodeToOutbound(node)
+		m.cfg.Outbounds = append(m.cfg.Outbounds, outbound)
+		m.outbounds[outbound.Name] = outbound
+		m.ensureTrafficLocked(outbound.Name)
+		m.ensureHealthLocked(outbound.Name, outbound.Disabled)
+	}
+	m.cfg.Routing = v2RouteRulesToRouting(model.RouteRules)
+	m.rules = append([]RoutingRule(nil), m.cfg.Routing.Rules...)
+}
+
+func v2EntryToInbound(entry EntryConfig) InboundConfig {
+	inbound := InboundConfig{
+		Name:           firstNonEmpty(entry.ID, entry.Name),
+		Protocol:       entry.Type,
+		Listen:         entry.Listen,
+		Port:           entry.Port,
+		Disabled:       !entry.Enabled,
+		Username:       entry.Auth.Username,
+		Password:       entry.Auth.Password,
+		ProtocolConfig: entry.ProtocolConfig,
+	}
+	applyProtocolConfigToInbound(&inbound, entry.ProtocolConfig)
+	return inbound
+}
+
+func applyProtocolConfigToInbound(inbound *InboundConfig, raw map[string]any) {
+	if len(raw) == 0 {
+		return
+	}
+	if users, ok := raw["users"].([]any); ok && len(users) > 0 {
+		if user, ok := users[0].(map[string]any); ok {
+			inbound.UUID = firstNonEmpty(inbound.UUID, stringValue(user["uuid"]))
+			inbound.Password = firstNonEmpty(inbound.Password, stringValue(user["password"]))
+			inbound.Flow = firstNonEmpty(inbound.Flow, stringValue(user["flow"]))
+			if inbound.AlterID == 0 {
+				inbound.AlterID = intValue(user["alter_id"])
+			}
+		}
+	}
+	inbound.Method = firstNonEmpty(inbound.Method, stringValue(raw["method"]))
+	inbound.Password = firstNonEmpty(inbound.Password, stringValue(raw["password"]))
+	if tls, ok := raw["tls"].(map[string]any); ok {
+		inbound.TLS = boolValue(tls["enabled"])
+		inbound.ServerName = firstNonEmpty(inbound.ServerName, stringValue(tls["server_name"]))
+		if reality, ok := tls["reality"].(map[string]any); ok {
+			inbound.Security = "reality"
+			inbound.PrivateKey = firstNonEmpty(inbound.PrivateKey, stringValue(reality["private_key"]))
+			if handshake, ok := reality["handshake"].(map[string]any); ok {
+				inbound.RealityHandshakeServer = firstNonEmpty(inbound.RealityHandshakeServer, stringValue(handshake["server"]))
+				if inbound.RealityHandshakePort == 0 {
+					inbound.RealityHandshakePort = intValue(handshake["server_port"])
+				}
+			}
+		}
+	}
+	if transport, ok := raw["transport"].(map[string]any); ok {
+		inbound.Transport = firstNonEmpty(inbound.Transport, stringValue(transport["type"]))
+		inbound.Path = firstNonEmpty(inbound.Path, stringValue(transport["path"]))
+	}
+}
+
+func outboundToV2Node(outbound OutboundConfig, source string, subscriptionID string) OutboundNodeConfig {
+	id := stableID("node", outbound.Name)
+	return OutboundNodeConfig{
+		ID:             id,
+		Name:           outbound.Name,
+		Type:           outbound.Protocol,
+		Region:         DetectNodeRegion(outbound.Name, outbound.Address),
+		Provider:       firstNonEmpty(outbound.Subscription, outbound.Group),
+		Address:        outbound.Address,
+		Port:           outbound.Port,
+		Enabled:        !outbound.Disabled,
+		Source:         firstNonEmpty(source, "manual"),
+		SubscriptionID: subscriptionID,
+		RawConfig:      outboundToRawConfig(outbound),
+	}
+}
+
+func v2NodeToOutbound(node OutboundNodeConfig) OutboundConfig {
+	outbound := OutboundConfig{
+		Name:         node.ID,
+		Protocol:     node.Type,
+		Address:      node.Address,
+		Port:         node.Port,
+		Disabled:     !node.Enabled,
+		Group:        node.Provider,
+		RawConfig:    node.RawConfig,
+		Raw:          "",
+		OriginalName: "",
+	}
+	applyRawConfigToOutbound(&outbound, node.RawConfig)
+	return outbound
+}
+
+func applyRawConfigToOutbound(outbound *OutboundConfig, raw map[string]any) {
+	if len(raw) == 0 {
+		return
+	}
+	outbound.Protocol = firstNonEmpty(outbound.Protocol, stringValue(raw["type"]))
+	outbound.Address = firstNonEmpty(outbound.Address, stringValue(raw["server"]))
+	if outbound.Port == 0 {
+		outbound.Port = intValue(raw["server_port"])
+	}
+	outbound.Username = firstNonEmpty(outbound.Username, stringValue(raw["username"]))
+	outbound.UUID = firstNonEmpty(outbound.UUID, stringValue(raw["uuid"]))
+	outbound.Password = firstNonEmpty(outbound.Password, stringValue(raw["password"]))
+	outbound.Method = firstNonEmpty(outbound.Method, stringValue(raw["method"]))
+	outbound.Flow = firstNonEmpty(outbound.Flow, stringValue(raw["flow"]))
+	outbound.Network = firstNonEmpty(outbound.Network, stringValue(raw["network"]))
+	if tls, ok := raw["tls"].(map[string]any); ok {
+		outbound.TLS = boolValue(tls["enabled"])
+		outbound.ServerName = firstNonEmpty(outbound.ServerName, stringValue(tls["server_name"]))
+		outbound.SkipCertVerify = outbound.SkipCertVerify || boolValue(tls["insecure"])
+		if utls, ok := tls["utls"].(map[string]any); ok {
+			outbound.Fingerprint = firstNonEmpty(outbound.Fingerprint, stringValue(utls["fingerprint"]))
+		}
+		if reality, ok := tls["reality"].(map[string]any); ok {
+			outbound.Security = "reality"
+			outbound.PublicKey = firstNonEmpty(outbound.PublicKey, stringValue(reality["public_key"]))
+			outbound.ShortID = firstNonEmpty(outbound.ShortID, stringValue(reality["short_id"]))
+		}
+	}
+	if transport, ok := raw["transport"].(map[string]any); ok {
+		outbound.Transport = firstNonEmpty(outbound.Transport, stringValue(transport["type"]))
+		outbound.Path = firstNonEmpty(outbound.Path, stringValue(transport["path"]))
+		if headers, ok := transport["headers"].(map[string]any); ok {
+			outbound.Host = firstNonEmpty(outbound.Host, stringListValue(headers["Host"]))
+		}
+	}
+}
+
+func deleteV2NodeOutboundConfig(items []OutboundConfig, id string) []OutboundConfig {
+	out := items[:0]
+	for _, item := range items {
+		if item.Name == id || stableID("node", item.Name) == id {
+			continue
+		}
+		out = append(out, item)
+	}
+	return out
+}
+
+func v2RouteRulesToRouting(rules []RouteRuleConfig) RoutingConfig {
+	routing := RoutingConfig{Mode: "rule", DefaultOutbound: "policy-final"}
+	for _, rule := range rules {
+		if rule.MatchType == "final" {
+			routing.DefaultOutbound = firstNonEmpty(rule.Outbound, routing.DefaultOutbound)
+			continue
+		}
+		routing.Rules = append(routing.Rules, RoutingRule{
+			Name:      firstNonEmpty(rule.ID, rule.Name),
+			MatchType: firstNonEmpty(rule.MatchType, "rule_set"),
+			Value:     firstNonEmpty(rule.MatchValue, rule.RuleSet),
+			Inbound:   rule.Inbound,
+			Outbound:  rule.Outbound,
+			Priority:  rule.Order,
+			Disabled:  !rule.Enabled,
+		})
+	}
+	return routing
 }
 
 func upsertInboundConfig(items []InboundConfig, next InboundConfig) []InboundConfig {
@@ -1449,8 +2745,75 @@ func (m *Manager) findEquivalentOutboundLocked(outbound OutboundConfig) string {
 	return ""
 }
 
+func (m *Manager) findMatchingOutboundLocked(outbound OutboundConfig, provider ProxyProviderConfig) string {
+	switch strings.ToLower(firstNonEmpty(provider.DedupStrategy, "equivalent")) {
+	case "none":
+		return ""
+	case "name":
+		if _, ok := m.outbounds[outbound.Name]; ok {
+			return outbound.Name
+		}
+		return ""
+	default:
+		return m.findEquivalentOutboundLocked(outbound)
+	}
+}
+
+func applyProviderImportOptions(outbound OutboundConfig, provider ProxyProviderConfig, fromSubscription bool) OutboundConfig {
+	if !fromSubscription {
+		return outbound
+	}
+	outbound.Subscription = provider.Name
+	outbound.Group = firstNonEmpty(provider.Group, outbound.Group, provider.Name)
+	if outbound.Name != "" {
+		outbound.Name = provider.RenamePrefix + outbound.Name + provider.RenameSuffix
+	}
+	return outbound
+}
+
+func shouldPreserveUserFields(provider ProxyProviderConfig, fromSubscription bool) bool {
+	if !fromSubscription {
+		return false
+	}
+	return provider.PreserveUserFields || len(provider.PreserveFields) > 0
+}
+
+func mergePreservedOutboundFields(existing OutboundConfig, incoming OutboundConfig, fields []string) OutboundConfig {
+	if len(fields) == 0 {
+		fields = []string{"name", "disabled", "server_name", "skip_cert_verify", "fingerprint", "alpn", "group"}
+	}
+	for _, field := range fields {
+		switch strings.ToLower(strings.TrimSpace(field)) {
+		case "name":
+			incoming.Name = existing.Name
+		case "disabled", "enabled":
+			incoming.Disabled = existing.Disabled
+		case "server_name", "sni":
+			incoming.ServerName = existing.ServerName
+		case "skip_cert_verify", "insecure":
+			incoming.SkipCertVerify = existing.SkipCertVerify
+		case "fingerprint", "fp":
+			incoming.Fingerprint = existing.Fingerprint
+		case "alpn":
+			incoming.ALPN = existing.ALPN
+		case "flow":
+			incoming.Flow = existing.Flow
+		case "transport", "network":
+			incoming.Transport = existing.Transport
+			incoming.Network = existing.Network
+		case "path":
+			incoming.Path = existing.Path
+		case "host":
+			incoming.Host = existing.Host
+		case "group":
+			incoming.Group = existing.Group
+		}
+	}
+	return incoming
+}
+
 func outboundSignature(outbound OutboundConfig) string {
-	return fmt.Sprintf("%s|%s|%d|%s|%s|%s|%s|%s|%s|%s|%s",
+	return fmt.Sprintf("%s|%s|%d|%s|%s|%s|%s|%s|%s|%s",
 		outbound.Protocol,
 		outbound.Address,
 		outbound.Port,
@@ -1458,11 +2821,50 @@ func outboundSignature(outbound OutboundConfig) string {
 		outbound.UUID,
 		outbound.Password,
 		outbound.Method,
-		outbound.ServerName,
 		outbound.PublicKey,
 		outbound.ShortID,
 		outbound.Transport,
 	)
+}
+
+func outboundConfigEquivalent(a, b OutboundConfig) bool {
+	return outboundSignature(a) == outboundSignature(b) &&
+		a.Flow == b.Flow &&
+		a.Fingerprint == b.Fingerprint &&
+		a.ALPN == b.ALPN &&
+		a.Path == b.Path &&
+		a.Host == b.Host &&
+		a.SkipCertVerify == b.SkipCertVerify
+}
+
+func outboundImportWarnings(outbound OutboundConfig) []string {
+	var warnings []string
+	switch outbound.Protocol {
+	case "vless":
+		if outbound.Security == "reality" || outbound.PublicKey != "" {
+			if outbound.PublicKey == "" {
+				warnings = append(warnings, "Reality 缺少 public key/pbk")
+			}
+			if outbound.ServerName == "" {
+				warnings = append(warnings, "Reality 缺少 SNI/server_name")
+			}
+			if outbound.Fingerprint == "" {
+				warnings = append(warnings, "Reality 未指定 fingerprint，将默认使用 chrome")
+			}
+			if strings.Contains(strings.ToLower(outbound.Raw), "xtls") && outbound.Flow == "" {
+				warnings = append(warnings, "原始链接包含 XTLS，但未解析到 flow")
+			}
+		}
+	case "shadowsocks", "ss":
+		if outbound.Method == "" {
+			warnings = append(warnings, "Shadowsocks 缺少加密方法")
+		}
+	case "hysteria2", "tuic", "anytls", "trojan":
+		if outbound.ServerName == "" && outbound.TLS {
+			warnings = append(warnings, "TLS 节点缺少 SNI/server_name")
+		}
+	}
+	return warnings
 }
 
 func nextRulePriority(rules []RoutingRule) int {
@@ -1506,7 +2908,7 @@ func enabledRuntime(inbounds []InboundConfig, outbounds []OutboundConfig, routin
 				continue
 			}
 		}
-		if rule.Outbound != "direct" {
+		if rule.Outbound != "direct" && rule.Outbound != "block" {
 			if _, ok := enabledOutboundNames[rule.Outbound]; !ok {
 				continue
 			}
@@ -1514,7 +2916,7 @@ func enabledRuntime(inbounds []InboundConfig, outbounds []OutboundConfig, routin
 		enabledRules = append(enabledRules, rule)
 	}
 	defaultOutbound := routing.DefaultOutbound
-	if defaultOutbound != "" && defaultOutbound != "direct" {
+	if defaultOutbound != "" && defaultOutbound != "direct" && defaultOutbound != "block" {
 		if _, ok := enabledOutboundNames[defaultOutbound]; !ok {
 			defaultOutbound = "direct"
 		}

@@ -8,6 +8,7 @@ import (
 
 	"golang.org/x/crypto/bcrypt"
 	_ "modernc.org/sqlite"
+	"nodetoolsagent/internal/repository"
 )
 
 func InitDatabase(path string) (*sql.DB, error) {
@@ -27,6 +28,10 @@ func InitDatabase(path string) (*sql.DB, error) {
 		return nil, err
 	}
 	if _, err := db.Exec(schemaSQL); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if _, err := db.Exec(repository.V2SchemaSQL); err != nil {
 		db.Close()
 		return nil, err
 	}
