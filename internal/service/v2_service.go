@@ -240,6 +240,7 @@ func (s V2ModelService) UpsertPolicyGroup(m model.V2Model, policy model.AppPolic
 	if policy.Type == "" {
 		policy.Type = "selector"
 	}
+	policy.RuleSetURL = strings.TrimSpace(policy.RuleSetURL)
 	if len(policy.Candidates) == 0 {
 		policy.Candidates = policyCandidates(m.RegionGroups, m.Nodes)
 	}

@@ -76,6 +76,10 @@ type V2RouteRulesRequest struct {
 	Rules []RouteRuleConfig `json:"rules"`
 }
 
+type V2PolicyRuleUpdateRequest struct {
+	UseProxy bool `json:"use_proxy"`
+}
+
 func RegisterAPI(mux *http.ServeMux, manager *Manager, auth *Auth) {
 	mux.HandleFunc("POST /api/login", func(w http.ResponseWriter, r *http.Request) {
 		var req LoginRequest
@@ -293,6 +297,16 @@ func RegisterAPI(mux *http.ServeMux, manager *Manager, auth *Auth) {
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+	})))
+	mux.Handle("POST /api/v2/app-policy-groups/update-rules", auth.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req V2PolicyRuleUpdateRequest
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		results, err := manager.UpdateV2PolicyRules(req.UseProxy)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"results": results, "model": manager.V2ModelSnapshot()})
 	})))
 	mux.Handle("GET /api/v2/route-rules", auth.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"route_rules": manager.V2ModelSnapshot().RouteRules})

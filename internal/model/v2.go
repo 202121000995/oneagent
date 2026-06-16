@@ -74,6 +74,7 @@ type AppPolicyGroupConfig struct {
 	Type       string   `yaml:"type,omitempty" json:"type,omitempty"`
 	Selected   string   `yaml:"selected,omitempty" json:"selected,omitempty"`
 	Candidates []string `yaml:"candidates,omitempty" json:"candidates,omitempty"`
+	RuleSetURL string   `yaml:"rule_set_url,omitempty" json:"rule_set_url,omitempty"`
 	Enabled    bool     `yaml:"enabled" json:"enabled"`
 	SortOrder  int      `yaml:"sort_order,omitempty" json:"sort_order,omitempty"`
 }
@@ -134,16 +135,16 @@ var DefaultRegionPresets = []RegionPreset{
 var DefaultPolicyGroups = []AppPolicyGroupConfig{
 	{ID: "policy-manual", Name: "节点选择", Selected: "region-hk", SortOrder: 10},
 	{ID: "policy-auto", Name: "自动选择", Selected: "policy-auto", SortOrder: 20},
-	{ID: "policy-netflix", Name: "奈飞", Selected: "region-sg", SortOrder: 30},
-	{ID: "policy-tiktok", Name: "TikTok", Selected: "region-us", SortOrder: 40},
-	{ID: "policy-openai", Name: "OpenAI", Selected: "region-us", SortOrder: 50},
-	{ID: "policy-gemini", Name: "Gemini", Selected: "region-us", SortOrder: 60},
-	{ID: "policy-claude", Name: "Claude", Selected: "region-us", SortOrder: 70},
-	{ID: "policy-youtube", Name: "YouTube", Selected: "region-hk", SortOrder: 80},
-	{ID: "policy-telegram", Name: "Telegram", Selected: "region-sg", SortOrder: 90},
-	{ID: "policy-bilibili", Name: "Bilibili", Selected: "direct", SortOrder: 100},
-	{ID: "policy-cn-direct", Name: "大陆直连", Selected: "direct", SortOrder: 110},
-	{ID: "policy-adblock", Name: "广告拦截", Selected: "block", SortOrder: 120},
+	{ID: "policy-netflix", Name: "奈飞", Selected: "region-sg", RuleSetURL: "https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Clash/Netflix/Netflix.yaml", SortOrder: 30},
+	{ID: "policy-tiktok", Name: "TikTok", Selected: "region-us", RuleSetURL: "https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Clash/TikTok/TikTok.yaml", SortOrder: 40},
+	{ID: "policy-openai", Name: "OpenAI", Selected: "region-us", RuleSetURL: "https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Clash/OpenAI/OpenAI.yaml", SortOrder: 50},
+	{ID: "policy-gemini", Name: "Gemini", Selected: "region-us", RuleSetURL: "https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Clash/Gemini/Gemini.yaml", SortOrder: 60},
+	{ID: "policy-claude", Name: "Claude", Selected: "region-us", RuleSetURL: "https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Clash/Claude/Claude.yaml", SortOrder: 70},
+	{ID: "policy-youtube", Name: "YouTube", Selected: "region-hk", RuleSetURL: "https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Clash/YouTube/YouTube.yaml", SortOrder: 80},
+	{ID: "policy-telegram", Name: "Telegram", Selected: "region-sg", RuleSetURL: "https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Clash/Telegram/Telegram.yaml", SortOrder: 90},
+	{ID: "policy-bilibili", Name: "Bilibili", Selected: "direct", RuleSetURL: "https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Clash/BiliBili/BiliBili.yaml", SortOrder: 100},
+	{ID: "policy-cn-direct", Name: "大陆直连", Selected: "direct", RuleSetURL: "https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Clash/China/China.yaml", SortOrder: 110},
+	{ID: "policy-adblock", Name: "广告拦截", Selected: "block", RuleSetURL: "https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Clash/AdvertisingLite/AdvertisingLite.yaml", SortOrder: 120},
 	{ID: "policy-final", Name: "Final", Selected: "policy-manual", SortOrder: 130},
 }
 

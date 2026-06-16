@@ -212,6 +212,11 @@
               <h2>应用策略组</h2>
               <span>路由命中应用组后，再由这里选择区域组、自动组、手动组、Direct、Block 或具体节点</span>
             </div>
+            <div class="panel-actions">
+              <label class="inline-check"><input id="policyRuleUseProxy" type="checkbox"> 使用代理拉取</label>
+              <button type="button" class="ghost-button" id="updatePolicyRulesButton">更新规则</button>
+              <button type="button" class="ghost-button" id="addPolicyGroupButton">添加应用组</button>
+            </div>
           </div>
           <div class="table-wrap">
             <table>
@@ -219,6 +224,7 @@
                 <tr>
                   <th>策略</th>
                   <th>当前选择</th>
+                  <th>分流规则</th>
                   <th>候选数</th>
                   <th>状态</th>
                   <th>操作</th>
@@ -227,6 +233,7 @@
               <tbody id="appPolicyRows"></tbody>
             </table>
           </div>
+          <pre class="preview-box" id="policyRuleUpdateResult"></pre>
         </section>
       </section>
 
@@ -656,17 +663,18 @@ sudo sh /opt/nodetools-agent/current/rollback-offline.sh</textarea></label>
 
     <section class="modal wide-modal" id="policyGroupModal" role="dialog" aria-modal="true" aria-labelledby="policyGroupModalTitle" hidden>
       <form id="policyGroupForm">
-        <input type="hidden" name="id">
         <input type="hidden" name="sort_order">
         <div class="modal-header">
           <h2 id="policyGroupModalTitle">编辑应用策略组</h2>
           <button type="button" class="close-button" data-close-modal>关闭</button>
         </div>
         <div class="modal-body two-column">
+          <label>策略 ID<input name="id" placeholder="例如 policy-disney"></label>
           <label>名称<input name="name"></label>
           <label>当前出口
             <select name="selected" id="policyGroupSelected"></select>
           </label>
+          <label class="full-width">分流规则 URL<input name="rule_set_url" placeholder="https://raw.githubusercontent.com/.../Rule.yaml"></label>
           <label>启用
             <select name="enabled">
               <option value="true">启用</option>

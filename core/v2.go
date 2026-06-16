@@ -375,6 +375,9 @@ func normalizeAppPolicyGroups(policies []AppPolicyGroupConfig, nodes []OutboundN
 		if len(policy.Candidates) > 0 {
 			base.Candidates = policy.Candidates
 		}
+		if policy.RuleSetURL != "" {
+			base.RuleSetURL = policy.RuleSetURL
+		}
 		if policy.SortOrder != 0 {
 			base.SortOrder = policy.SortOrder
 		}

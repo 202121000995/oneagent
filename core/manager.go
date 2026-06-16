@@ -1494,6 +1494,7 @@ func ruleSetMatches(ruleSet RuleSetConfig, req RoutingPreviewRequest) bool {
 	if ruleSet.Tag == "" {
 		return false
 	}
+	ruleSet = loadLocalRuleSetForPreview(ruleSet)
 	target := strings.ToLower(strings.TrimSpace(req.Target))
 	if host, _, err := net.SplitHostPort(target); err == nil {
 		target = host

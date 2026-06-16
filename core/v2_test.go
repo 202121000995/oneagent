@@ -2,6 +2,7 @@ package core
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -100,6 +101,30 @@ func TestCompileV2RuntimeBuildsPolicyChain(t *testing.T) {
 	}
 	if rules[1].(map[string]any)["rule_set"] == nil {
 		t.Fatalf("expected first-match rule_set rules after sniff action, got %#v", rules)
+	}
+}
+
+func TestNormalizeV2ConfigKeepsDefaultPolicyRuleURLs(t *testing.T) {
+	cfg := NormalizeV2Config(Config{
+		Entries: []EntryConfig{{ID: "entry-local-mixed", Name: "Local-Mixed", Type: "mixed", Listen: "127.0.0.1", Port: 1080, Enabled: true}},
+		AppPolicyGroups: []AppPolicyGroupConfig{{
+			ID:         "policy-youtube",
+			Name:       "YouTube",
+			Selected:   "region-hk",
+			Candidates: []string{"region-hk", "direct", "block"},
+			Enabled:    true,
+			SortOrder:  80,
+		}},
+	})
+	var youtube AppPolicyGroupConfig
+	for _, policy := range cfg.AppPolicyGroups {
+		if policy.ID == "policy-youtube" {
+			youtube = policy
+			break
+		}
+	}
+	if youtube.RuleSetURL == "" || !strings.Contains(youtube.RuleSetURL, "/YouTube/YouTube.yaml") {
+		t.Fatalf("expected default youtube rule URL to be restored, got %#v", youtube)
 	}
 }
 

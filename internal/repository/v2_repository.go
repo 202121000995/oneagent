@@ -71,6 +71,7 @@ CREATE TABLE IF NOT EXISTS v2_app_policy_groups (
 	type TEXT NOT NULL DEFAULT 'selector',
 	selected TEXT NOT NULL DEFAULT '',
 	candidates_json TEXT NOT NULL DEFAULT '[]',
+	rule_set_url TEXT NOT NULL DEFAULT '',
 	enabled INTEGER NOT NULL DEFAULT 1,
 	sort_order INTEGER NOT NULL DEFAULT 0,
 	updated_at TEXT NOT NULL
@@ -114,7 +115,34 @@ func NewV2Repository(db *sql.DB) *V2Repository {
 }
 
 func (r *V2Repository) Migrate(ctx context.Context) error {
-	_, err := r.db.ExecContext(ctx, V2SchemaSQL)
+	if _, err := r.db.ExecContext(ctx, V2SchemaSQL); err != nil {
+		return err
+	}
+	return r.ensureColumn(ctx, "v2_app_policy_groups", "rule_set_url", "TEXT NOT NULL DEFAULT ''")
+}
+
+func (r *V2Repository) ensureColumn(ctx context.Context, table string, column string, definition string) error {
+	rows, err := r.db.QueryContext(ctx, "PRAGMA table_info("+table+")")
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var name, typ string
+		var notNull, pk int
+		var defaultValue any
+		if err := rows.Scan(&cid, &name, &typ, &notNull, &defaultValue, &pk); err != nil {
+			return err
+		}
+		if name == column {
+			return nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	_, err = r.db.ExecContext(ctx, "ALTER TABLE "+table+" ADD COLUMN "+column+" "+definition)
 	return err
 }
 
@@ -197,9 +225,9 @@ func (r *V2Repository) SaveModel(ctx context.Context, m model.V2Model) error {
 			return fmt.Errorf("app policy group id is required")
 		}
 		if _, err := tx.ExecContext(ctx,
-			`INSERT INTO v2_app_policy_groups (id, name, type, selected, candidates_json, enabled, sort_order, updated_at)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-			policy.ID, policy.Name, policy.Type, policy.Selected, mustJSON(policy.Candidates), boolInt(policy.Enabled), policy.SortOrder, now,
+			`INSERT INTO v2_app_policy_groups (id, name, type, selected, candidates_json, rule_set_url, enabled, sort_order, updated_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			policy.ID, policy.Name, policy.Type, policy.Selected, mustJSON(policy.Candidates), policy.RuleSetURL, boolInt(policy.Enabled), policy.SortOrder, now,
 		); err != nil {
 			return err
 		}
@@ -343,7 +371,7 @@ func (r *V2Repository) LoadModel(ctx context.Context) (model.V2Model, bool, erro
 		return m, false, err
 	}
 
-	rows, err = r.db.QueryContext(ctx, `SELECT id, name, type, selected, candidates_json, enabled, sort_order FROM v2_app_policy_groups ORDER BY sort_order, id`)
+	rows, err = r.db.QueryContext(ctx, `SELECT id, name, type, selected, candidates_json, rule_set_url, enabled, sort_order FROM v2_app_policy_groups ORDER BY sort_order, id`)
 	if err != nil {
 		return m, false, err
 	}
@@ -351,7 +379,7 @@ func (r *V2Repository) LoadModel(ctx context.Context) (model.V2Model, bool, erro
 		var policy model.AppPolicyGroupConfig
 		var enabled int
 		var candidatesJSON string
-		if err := rows.Scan(&policy.ID, &policy.Name, &policy.Type, &policy.Selected, &candidatesJSON, &enabled, &policy.SortOrder); err != nil {
+		if err := rows.Scan(&policy.ID, &policy.Name, &policy.Type, &policy.Selected, &candidatesJSON, &policy.RuleSetURL, &enabled, &policy.SortOrder); err != nil {
 			rows.Close()
 			return m, false, err
 		}

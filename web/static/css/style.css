@@ -216,6 +216,22 @@ h3 {
   flex-wrap: wrap;
 }
 
+.inline-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.inline-check input {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--accent);
+}
+
 .table-tools {
   padding: 14px 18px 0;
 }

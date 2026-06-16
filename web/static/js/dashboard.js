@@ -657,6 +657,17 @@ const policyTargetOptions = () => {
   return [...base, ...regions, ...nodes];
 };
 
+const nextPolicySortOrder = () => {
+  const policies = getV2PolicyGroups();
+  return policies.reduce((max, policy) => Math.max(max, Number(policy.sort_order || 0)), 0) + 10;
+};
+
+const policyRuleSetTag = (policyId) => {
+  const rule = (state.v2Model?.route_rules || []).find((item) => item.outbound === policyId && (item.match_type || "rule_set") === "rule_set" && item.rule_set);
+  if (rule) return rule.rule_set;
+  return (policyId || "").replace(/^policy-/, "") || "--";
+};
+
 const selectedValues = (container) => Array.from(container?.querySelectorAll('input[type="checkbox"]:checked') || []).map((item) => item.value);
 
 const renderCheckList = (container, name, items, selected, emptyText) => {
@@ -902,11 +913,12 @@ const renderPolicyGroups = () => {
       <tr>
         <td><div class="node-name">${escapeHTML(policy.name || policy.id)}</div><div class="node-hint">${escapeHTML(policy.id)}</div></td>
         <td>${escapeHTML(targetLabel(policy.selected))}</td>
+        <td><div class="node-name">${escapeHTML(policyRuleSetTag(policy.id))}</div><div class="node-hint">${escapeHTML(policy.rule_set_url || "--")}</div></td>
         <td>${(policy.candidates || []).length}</td>
         <td><span class="${policy.enabled ? "badge" : "badge badge-muted"}">${policy.enabled ? "启用" : "停用"}</span></td>
         <td><button class="icon-button" data-edit-policy-group="${escapeHTML(policy.id)}" type="button">编辑</button></td>
       </tr>
-    `).join("") || `<tr><td colspan="5" class="empty-cell">还没有应用策略组。</td></tr>`;
+    `).join("") || `<tr><td colspan="6" class="empty-cell">还没有应用策略组。</td></tr>`;
   }
   setText("policyModelUpdated", new Date().toLocaleTimeString());
 };
@@ -1420,14 +1432,23 @@ const renderPolicySelectedOptions = (selected = "") => {
   select.value = candidates.includes(selected) ? selected : (candidates[0] || "");
 };
 
-const openPolicyGroupEditor = (id) => {
-  const policy = getV2PolicyGroups().find((item) => item.id === id);
+const openPolicyGroupEditor = (id = "") => {
+  const policy = getV2PolicyGroups().find((item) => item.id === id) || {
+    id: "",
+    name: "",
+    selected: "policy-manual",
+    candidates: policyTargetOptions().map((item) => item.id),
+    enabled: true,
+    sort_order: nextPolicySortOrder(),
+    rule_set_url: "",
+  };
   const form = document.getElementById("policyGroupForm");
-  if (!policy || !form) return;
+  if (!form) return;
   form.reset();
   form.elements.id.value = policy.id;
   form.elements.name.value = policy.name || policy.id;
   form.elements.sort_order.value = policy.sort_order || 0;
+  form.elements.rule_set_url.value = policy.rule_set_url || "";
   form.elements.enabled.value = policy.enabled === false ? "false" : "true";
   renderCheckList(
     document.getElementById("policyGroupCandidateList"),
@@ -2016,6 +2037,7 @@ document.getElementById("policyGroupForm")?.addEventListener("submit", async (ev
     type: "selector",
     selected: candidates.includes(selected) ? selected : (candidates[0] || "direct"),
     candidates,
+    rule_set_url: form.elements.rule_set_url.value.trim(),
     enabled: form.elements.enabled.value !== "false",
     sort_order: Number(form.elements.sort_order.value || 0),
   };
@@ -2024,6 +2046,31 @@ document.getElementById("policyGroupForm")?.addEventListener("submit", async (ev
     closeModal();
     await refresh();
   } catch (error) {
+    alert(error.message);
+  }
+});
+
+document.getElementById("addPolicyGroupButton")?.addEventListener("click", () => openPolicyGroupEditor(""));
+
+document.getElementById("updatePolicyRulesButton")?.addEventListener("click", async () => {
+  const output = document.getElementById("policyRuleUpdateResult");
+  if (output) output.textContent = "正在拉取并转换应用规则...";
+  try {
+    const payload = await sendJSON("/api/v2/app-policy-groups/update-rules", "POST", {
+      use_proxy: document.getElementById("policyRuleUseProxy")?.checked || false,
+    });
+    if (payload.model) state.v2Model = payload.model;
+    renderPolicyGroups();
+    if (output) {
+      const rows = payload.results || [];
+      output.textContent = rows.length ? rows.map((item) => {
+        if (item.status === "error") return `${item.policy_name || item.policy_id}: 失败 - ${item.error}`;
+        return `${item.policy_name || item.policy_id}: ${item.rule_set} 已更新，域名 ${item.domain}，后缀 ${item.domain_suffix}，关键词 ${item.domain_keyword}，IP ${item.ip_cidr}，跳过 ${item.skipped}`;
+      }).join("\n") : "没有配置规则 URL 的应用策略组。";
+    }
+    await refresh();
+  } catch (error) {
+    if (output) output.textContent = error.message;
     alert(error.message);
   }
 });
