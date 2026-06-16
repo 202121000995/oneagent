@@ -65,6 +65,7 @@ type Manager struct {
 	outbounds     map[string]OutboundConfig
 	rules         []RoutingRule
 	traffic       map[string]*Traffic
+	totalTraffic  Traffic
 	health        map[string]Health
 	subscriptions map[string]time.Time
 }
@@ -76,6 +77,7 @@ type managerSnapshot struct {
 	outbounds     map[string]OutboundConfig
 	rules         []RoutingRule
 	traffic       map[string]*Traffic
+	totalTraffic  Traffic
 	health        map[string]Health
 	subscriptions map[string]time.Time
 }
@@ -87,6 +89,7 @@ type ConfigHistoryEntry struct {
 }
 
 const defaultConfigHistoryKeep = 100
+const singBoxClashAPIAddress = "127.0.0.1:39091"
 
 type Traffic struct {
 	UploadBytes   int64
@@ -252,6 +255,7 @@ func (m *Manager) snapshotLocked() managerSnapshot {
 		outbounds:     outbounds,
 		rules:         append([]RoutingRule(nil), m.rules...),
 		traffic:       traffic,
+		totalTraffic:  m.totalTraffic,
 		health:        health,
 		subscriptions: subscriptions,
 	}
@@ -264,6 +268,7 @@ func (m *Manager) restoreLocked(snapshot managerSnapshot) {
 	m.outbounds = snapshot.outbounds
 	m.rules = append([]RoutingRule(nil), snapshot.rules...)
 	m.traffic = snapshot.traffic
+	m.totalTraffic = snapshot.totalTraffic
 	m.health = snapshot.health
 	m.subscriptions = snapshot.subscriptions
 }
@@ -376,6 +381,20 @@ func (m *Manager) StartTrafficSampler() {
 			}
 		}
 	}()
+	go func() {
+		ticker := time.NewTicker(2 * time.Second)
+		defer ticker.Stop()
+
+		m.sampleKernelTraffic()
+		for {
+			select {
+			case <-m.stopCh:
+				return
+			case <-ticker.C:
+				m.sampleKernelTraffic()
+			}
+		}
+	}()
 }
 
 func (m *Manager) ListNodes() []Node {
@@ -450,6 +469,10 @@ func (m *Manager) Status() Status {
 
 	m.mu.RLock()
 	defer m.mu.RUnlock()
+	if m.totalTraffic.UploadBytes > 0 || m.totalTraffic.DownloadBytes > 0 {
+		upload = m.totalTraffic.UploadBytes
+		download = m.totalTraffic.DownloadBytes
+	}
 	return Status{
 		Version:          Version,
 		BuildTime:        BuildTime,
@@ -2277,6 +2300,81 @@ func (m *Manager) sampleTraffic() {
 			log.Printf("persist traffic failed: %v", err)
 		}
 	}
+}
+
+type clashConnectionsPayload struct {
+	UploadTotal   int64             `json:"uploadTotal"`
+	DownloadTotal int64             `json:"downloadTotal"`
+	Connections   []clashConnection `json:"connections"`
+}
+
+type clashConnection struct {
+	Upload   int64    `json:"upload"`
+	Download int64    `json:"download"`
+	Chains   []string `json:"chains"`
+}
+
+func (m *Manager) sampleKernelTraffic() {
+	m.mu.RLock()
+	kernel := m.kernel
+	outbounds := make(map[string]struct{}, len(m.outbounds))
+	for tag := range m.outbounds {
+		outbounds[tag] = struct{}{}
+	}
+	m.mu.RUnlock()
+	if kernel == nil || kernel.Name() != "sing-box" {
+		return
+	}
+	client := &http.Client{Timeout: 1500 * time.Millisecond}
+	resp, err := client.Get("http://" + singBoxClashAPIAddress + "/connections")
+	if err != nil {
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return
+	}
+	var payload clashConnectionsPayload
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		return
+	}
+	upload := payload.UploadTotal
+	download := payload.DownloadTotal
+	outboundTraffic := map[string]Traffic{}
+	if upload == 0 && download == 0 {
+		for _, conn := range payload.Connections {
+			upload += conn.Upload
+			download += conn.Download
+		}
+	}
+	for _, conn := range payload.Connections {
+		for _, tag := range conn.Chains {
+			if _, ok := outbounds[tag]; !ok {
+				continue
+			}
+			item := outboundTraffic[tag]
+			item.UploadBytes += conn.Upload
+			item.DownloadBytes += conn.Download
+			item.UpdatedAt = time.Now()
+			outboundTraffic[tag] = item
+			break
+		}
+	}
+	m.mu.Lock()
+	now := time.Now()
+	m.totalTraffic = Traffic{UploadBytes: upload, DownloadBytes: download, UpdatedAt: now}
+	for name, traffic := range outboundTraffic {
+		current := m.traffic[name]
+		if current == nil {
+			current = &Traffic{}
+			m.traffic[name] = current
+		}
+		current.UploadBytes = traffic.UploadBytes
+		current.DownloadBytes = traffic.DownloadBytes
+		current.UpdatedAt = now
+	}
+	m.mu.Unlock()
+	m.sampleTraffic()
 }
 
 func (m *Manager) persistConfigLocked(cfg Config) error {

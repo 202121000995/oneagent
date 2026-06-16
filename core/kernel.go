@@ -303,6 +303,9 @@ func (k *SingBoxKernel) GenerateConfig(state RuntimeState) ([]byte, error) {
 		"inbounds":  singBoxInbounds(state.Inbounds),
 		"outbounds": singBoxOutbounds(state.Outbounds),
 		"route":     route,
+		"experimental": map[string]any{
+			"clash_api": map[string]any{"external_controller": singBoxClashAPIAddress},
+		},
 	}
 	return json.MarshalIndent(payload, "", "  ")
 }
@@ -432,8 +435,14 @@ func finalizeSingBoxInbound(item map[string]any, inbound InboundConfig) {
 	if stringValue(item["type"]) == "" {
 		item["type"] = firstNonEmpty(inbound.Protocol, "mixed")
 	}
-	if stringValue(item["listen"]) == "" && len(inbound.ProtocolConfig) == 0 {
-		item["listen"] = firstNonEmpty(inbound.Listen, "::")
+	if stringValue(item["listen"]) == "" {
+		listen := inbound.Listen
+		if listen == "" && len(inbound.ProtocolConfig) == 0 {
+			listen = "::"
+		}
+		if listen != "" {
+			item["listen"] = listen
+		}
 	}
 	if _, ok := item["listen_port"]; !ok && inbound.Port > 0 {
 		item["listen_port"] = inbound.Port

@@ -147,6 +147,11 @@ func TestSingBoxKernelGenerateConfig(t *testing.T) {
 	if route["final"] != "ss" {
 		t.Fatalf("expected default outbound final ss, got %#v", route)
 	}
+	experimental := cfg["experimental"].(map[string]any)
+	clashAPI := experimental["clash_api"].(map[string]any)
+	if clashAPI["external_controller"] != singBoxClashAPIAddress {
+		t.Fatalf("expected local clash api for traffic stats, got %#v", clashAPI)
+	}
 	rules := route["rules"].([]any)
 	if len(rules) != 4 {
 		t.Fatalf("expected sniff action plus 3 sing-box route rules, got %#v", rules)
@@ -174,6 +179,16 @@ func TestSingBoxRawProtocolConfigsPassThrough(t *testing.T) {
 				"interface_name": "tun0",
 				"address":        []string{"172.19.0.1/30"},
 				"auto_route":     true,
+			},
+		}, {
+			Name:     "entry-ss",
+			Protocol: "shadowsocks",
+			Listen:   "0.0.0.0",
+			Port:     8388,
+			ProtocolConfig: map[string]any{
+				"type":     "shadowsocks",
+				"method":   "aes-256-gcm",
+				"password": "secret",
 			},
 		}},
 		Outbounds: []OutboundConfig{{
@@ -211,6 +226,10 @@ func TestSingBoxRawProtocolConfigsPassThrough(t *testing.T) {
 	}
 	if _, ok := inbound["listen_port"]; ok {
 		t.Fatalf("raw non-port inbound should not receive listen_port, got %#v", inbound)
+	}
+	ssInbound := generated["inbounds"].([]any)[1].(map[string]any)
+	if ssInbound["listen"] != "0.0.0.0" || ssInbound["listen_port"] != float64(8388) {
+		t.Fatalf("raw port inbound should keep listen and listen_port, got %#v", ssInbound)
 	}
 
 	var outbound map[string]any
