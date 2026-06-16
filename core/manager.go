@@ -640,6 +640,46 @@ func (m *Manager) SetV2NodeEnabled(id string, enabled bool) (OutboundNodeConfig,
 	return node, nil
 }
 
+func (m *Manager) SetV2NodesEnabled(items []BatchNodeItem, enabled bool) ([]Node, error) {
+	if len(items) == 0 {
+		return nil, fmt.Errorf("no nodes selected")
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	snapshot := m.snapshotLocked()
+	model := V2ModelFromConfig(m.cfg)
+	svc := v2service.NewV2ModelService()
+	for _, item := range items {
+		if item.Name == "" {
+			return nil, fmt.Errorf("name is required")
+		}
+		var err error
+		switch item.Type {
+		case "inbound":
+			model, _, err = svc.SetEntryEnabled(model, item.Name, enabled)
+		case "outbound":
+			model, _, err = svc.SetNodeEnabled(model, item.Name, enabled)
+		default:
+			return nil, fmt.Errorf("node type must be inbound or outbound")
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
+	m.applyV2ModelToConfigLocked(model)
+	for _, item := range items {
+		m.ensureHealthLocked(item.Name, !enabled)
+	}
+	if err := m.commitWithRollbackLocked(snapshot); err != nil {
+		return nil, err
+	}
+	nodes := make([]Node, 0, len(items))
+	for _, item := range items {
+		nodes = append(nodes, m.nodeLocked(item.Name, item.Type))
+	}
+	return nodes, nil
+}
+
 func (m *Manager) UpsertV2RegionGroup(group RegionGroupConfig) (RegionGroupConfig, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -1052,16 +1092,25 @@ func (m *Manager) ImportOutboundsReportWithOptions(outbounds []OutboundConfig, o
 		Imported: make([]Node, 0, len(outbounds)),
 		Details:  make([]ImportOutboundDetail, 0, len(outbounds)),
 	}
+	useV2 := m.cfg.ModelVersion == "v2" || HasV2Config(m.cfg)
+	v2Model := V2Model{}
+	subscriptionID := ""
+	if useV2 {
+		v2Model = V2ModelFromConfig(m.cfg)
+		subscriptionID = subscriptionIDForProvider(options.Provider.Name, v2Model.Subscriptions)
+	}
+	v2Svc := v2service.NewV2ModelService()
 	for _, outbound := range outbounds {
 		outbound = enrichOutboundFromRaw(outbound)
 		outbound = applyProviderImportOptions(outbound, options.Provider, options.FromSubscription)
 		originalName := outbound.Name
 		action := "added"
 		preservedName := false
+		existing := ""
 		if outbound.Name == "" {
 			outbound.Name = outbound.Protocol + "-" + outbound.Address
 		}
-		if existing := m.findMatchingOutboundLocked(outbound, options.Provider); existing != "" {
+		if existing = m.findMatchingOutboundLocked(outbound, options.Provider); existing != "" {
 			action = "updated"
 			if existingConfig, ok := m.outbounds[existing]; ok && outboundConfigEquivalent(existingConfig, outbound) {
 				action = "unchanged"
@@ -1090,7 +1139,32 @@ func (m *Manager) ImportOutboundsReportWithOptions(outbounds []OutboundConfig, o
 		m.cfg.Outbounds = upsertOutboundConfig(m.cfg.Outbounds, outbound)
 		m.ensureTrafficLocked(outbound.Name)
 		m.ensureHealthLocked(outbound.Name, outbound.Disabled)
-		report.Imported = append(report.Imported, m.nodeLocked(outbound.Name, "outbound"))
+		importedNode := m.nodeLocked(outbound.Name, "outbound")
+		if useV2 {
+			source := "manual"
+			if options.FromSubscription {
+				source = "subscription"
+			}
+			v2Node := outboundToV2Node(outbound, source, subscriptionID)
+			if existingNode, ok := v2NodeByID(v2Model.Nodes, existing); ok {
+				v2Node.ID = existingNode.ID
+				v2Node.Name = firstNonEmpty(existingNode.Name, originalName, v2Node.Name)
+				v2Node.Region = firstNonEmpty(existingNode.Region, v2Node.Region)
+				if !options.FromSubscription {
+					v2Node.Source = firstNonEmpty(existingNode.Source, v2Node.Source)
+					v2Node.SubscriptionID = firstNonEmpty(existingNode.SubscriptionID, v2Node.SubscriptionID)
+				}
+			} else if originalName != "" {
+				v2Node.Name = originalName
+			}
+			var err error
+			v2Model, v2Node, err = v2Svc.UpsertNode(v2Model, v2Node)
+			if err != nil {
+				return ImportOutboundsReport{}, err
+			}
+			importedNode = nodeFromV2Outbound(v2Node)
+		}
+		report.Imported = append(report.Imported, importedNode)
 		switch action {
 		case "added":
 			report.Added++
@@ -1110,10 +1184,37 @@ func (m *Manager) ImportOutboundsReportWithOptions(outbounds []OutboundConfig, o
 			Warnings:      outboundImportWarnings(outbound),
 		})
 	}
+	if useV2 {
+		m.applyV2ModelToConfigLocked(v2Model)
+	}
 	if err := m.commitWithRollbackLocked(snapshot); err != nil {
 		return ImportOutboundsReport{}, err
 	}
 	return report, nil
+}
+
+func v2NodeByID(nodes []OutboundNodeConfig, id string) (OutboundNodeConfig, bool) {
+	if id == "" {
+		return OutboundNodeConfig{}, false
+	}
+	for _, node := range nodes {
+		if node.ID == id {
+			return node, true
+		}
+	}
+	return OutboundNodeConfig{}, false
+}
+
+func nodeFromV2Outbound(node OutboundNodeConfig) Node {
+	return Node{
+		Name:     node.ID,
+		Type:     "outbound",
+		Protocol: node.Type,
+		Address:  node.Address,
+		Port:     node.Port,
+		Enabled:  node.Enabled,
+		Status:   "unknown",
+	}
 }
 
 func (m *Manager) UpdateSubscriptions() ([]SubscriptionUpdateResult, error) {
@@ -1276,11 +1377,12 @@ func (m *Manager) PreviewRouting(req RoutingPreviewRequest) RoutingPreviewResult
 			}
 		}
 	}
+	ruleSets := ruleSetLookup(cfg.RuleSets, cfg.Routing.RuleSets)
 	for _, rule := range sortedRoutingRules(cfg.Routing.Rules) {
 		if rule.Disabled {
 			continue
 		}
-		if routingRuleMatches(rule, req) {
+		if routingRuleMatches(rule, req, ruleSets) {
 			result.Outbound = rule.Outbound
 			result.MatchedRule = firstNonEmpty(rule.Name, fmt.Sprintf("%s-%d", routingRuleMatchType(rule), rule.Priority))
 			result.MatchType = routingRuleMatchType(rule)
@@ -1294,7 +1396,7 @@ func (m *Manager) PreviewRouting(req RoutingPreviewRequest) RoutingPreviewResult
 	return result
 }
 
-func routingRuleMatches(rule RoutingRule, req RoutingPreviewRequest) bool {
+func routingRuleMatches(rule RoutingRule, req RoutingPreviewRequest, ruleSets map[string]RuleSetConfig) bool {
 	matchType := routingRuleMatchType(rule)
 	values := splitCSV(routingRuleValue(rule))
 	if len(values) == 0 {
@@ -1353,6 +1455,12 @@ func routingRuleMatches(rule RoutingRule, req RoutingPreviewRequest) bool {
 				return true
 			}
 		}
+	case "rule_set":
+		for _, value := range values {
+			if ruleSetMatches(ruleSets[strings.TrimSpace(value)], req) {
+				return true
+			}
+		}
 	case "geosite":
 		for _, value := range values {
 			if strings.EqualFold(value, "cn") && (target == "cn" || strings.HasSuffix(target, ".cn")) {
@@ -1365,6 +1473,55 @@ func routingRuleMatches(rule RoutingRule, req RoutingPreviewRequest) bool {
 			if strings.EqualFold(value, "cn") && ip != nil && isPrivateOrChinaPreviewIP(ip) {
 				return true
 			}
+		}
+	}
+	return false
+}
+
+func ruleSetLookup(groups ...[]RuleSetConfig) map[string]RuleSetConfig {
+	out := map[string]RuleSetConfig{}
+	for _, group := range groups {
+		for _, ruleSet := range group {
+			if ruleSet.Tag != "" {
+				out[ruleSet.Tag] = ruleSet
+			}
+		}
+	}
+	return out
+}
+
+func ruleSetMatches(ruleSet RuleSetConfig, req RoutingPreviewRequest) bool {
+	if ruleSet.Tag == "" {
+		return false
+	}
+	target := strings.ToLower(strings.TrimSpace(req.Target))
+	if host, _, err := net.SplitHostPort(target); err == nil {
+		target = host
+	}
+	for _, value := range ruleSet.Domain {
+		if strings.EqualFold(strings.TrimSpace(value), target) {
+			return true
+		}
+	}
+	for _, value := range ruleSet.DomainSuffix {
+		suffix := strings.TrimPrefix(strings.ToLower(strings.TrimSpace(value)), ".")
+		if target == suffix || strings.HasSuffix(target, "."+suffix) {
+			return true
+		}
+	}
+	for _, value := range ruleSet.DomainKeyword {
+		if strings.Contains(target, strings.ToLower(strings.TrimSpace(value))) {
+			return true
+		}
+	}
+	ip := net.ParseIP(target)
+	if ip == nil {
+		return false
+	}
+	for _, value := range ruleSet.IPCIDR {
+		_, cidr, err := net.ParseCIDR(strings.TrimSpace(value))
+		if err == nil && cidr.Contains(ip) {
+			return true
 		}
 	}
 	return false

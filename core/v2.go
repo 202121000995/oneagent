@@ -255,6 +255,9 @@ func normalizeOutboundNodes(nodes []OutboundNodeConfig, legacy []OutboundConfig,
 			continue
 		}
 		id := stableID("node", outbound.Name)
+		if _, ok := byID[outbound.Name]; ok {
+			id = outbound.Name
+		}
 		raw := outboundToRawConfig(outbound)
 		source := "manual"
 		if outbound.Subscription != "" {
@@ -274,7 +277,12 @@ func normalizeOutboundNodes(nodes []OutboundNodeConfig, legacy []OutboundConfig,
 			RawConfig:      raw,
 		}
 		if existing, ok := byID[id]; ok {
+			next.Name = firstNonEmpty(existing.Name, next.Name)
 			next.Region = firstNonEmpty(existing.Region, next.Region)
+			next.Provider = firstNonEmpty(existing.Provider, next.Provider)
+			next.Source = firstNonEmpty(existing.Source, next.Source)
+			next.SubscriptionID = firstNonEmpty(existing.SubscriptionID, next.SubscriptionID)
+			next.Enabled = existing.Enabled
 			next.ManualGroupIDs = append([]string(nil), existing.ManualGroupIDs...)
 			next.Tags = append([]string(nil), existing.Tags...)
 		}

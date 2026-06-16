@@ -224,6 +224,22 @@ func RegisterAPI(mux *http.ServeMux, manager *Manager, auth *Auth) {
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"node": node})
 	})))
+	mux.Handle("PATCH /api/v2/nodes/batch/enabled", auth.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Items   []BatchNodeItem `json:"items"`
+			Enabled bool            `json:"enabled"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid json body")
+			return
+		}
+		nodes, err := manager.SetV2NodesEnabled(req.Items, req.Enabled)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"nodes": nodes, "model": manager.V2ModelSnapshot()})
+	})))
 	mux.Handle("DELETE /api/v2/nodes/{id}", auth.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if err := manager.DeleteV2Node(r.PathValue("id")); err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())

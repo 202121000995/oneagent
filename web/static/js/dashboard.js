@@ -1732,7 +1732,7 @@ document.addEventListener("click", async (event) => {
       await postJSON("/api/nodes/batch/test", { items });
     }
     if (button.dataset.batchAction === "disable") {
-      await sendJSON("/api/nodes/batch/enabled", "PATCH", { items, enabled: false });
+      await sendJSON("/api/v2/nodes/batch/enabled", "PATCH", { items, enabled: false });
     }
     await refresh();
   } catch (error) {

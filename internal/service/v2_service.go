@@ -50,6 +50,16 @@ func (s V2ModelService) DeleteEntry(m model.V2Model, id string) (model.V2Model, 
 	return m, nil
 }
 
+func (s V2ModelService) SetEntryEnabled(m model.V2Model, id string, enabled bool) (model.V2Model, model.EntryConfig, error) {
+	for i := range m.Entries {
+		if m.Entries[i].ID == id {
+			m.Entries[i].Enabled = enabled
+			return m, m.Entries[i], nil
+		}
+	}
+	return m, model.EntryConfig{}, fmt.Errorf("entry %q does not exist", id)
+}
+
 func (s V2ModelService) UpsertSubscription(m model.V2Model, sub model.SubscriptionConfig) (model.V2Model, model.SubscriptionConfig, error) {
 	if sub.ID == "" {
 		sub.ID = stableID("sub", firstNonEmpty(sub.Name, sub.URL))

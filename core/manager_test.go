@@ -506,6 +506,136 @@ func TestPreviewRoutingExplainsFinalOutbound(t *testing.T) {
 	}
 }
 
+func TestPreviewRoutingMatchesV2RuleSet(t *testing.T) {
+	manager := NewManager(nil, "")
+	manager.cfg = NormalizeV2Config(Config{
+		ModelVersion: "v2",
+		Kernel:       KernelConfig{Type: "placeholder"},
+		Entries: []EntryConfig{{
+			ID:      "entry-local-mixed",
+			Name:    "Local-Mixed",
+			Type:    "mixed",
+			Listen:  "127.0.0.1",
+			Port:    1080,
+			Enabled: true,
+		}},
+	})
+
+	preview := manager.PreviewRouting(RoutingPreviewRequest{Inbound: "entry-local-mixed", Target: "www.youtube.com", Protocol: "tcp", Port: 443})
+	if preview.Outbound != "policy-youtube" || preview.MatchedRule != "rule-youtube" || preview.MatchType != "rule_set" {
+		t.Fatalf("expected youtube rule_set match, got %#v", preview)
+	}
+}
+
+func TestSubscriptionImportWritesV2NodePool(t *testing.T) {
+	db, err := InitDatabase(filepath.Join(t.TempDir(), "nodetools.db"))
+	if err != nil {
+		t.Fatalf("InitDatabase returned error: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	manager := NewManager(db, "")
+	cfg := NormalizeV2Config(Config{
+		ModelVersion: "v2",
+		Kernel:       KernelConfig{Type: "placeholder"},
+		Entries: []EntryConfig{{
+			ID:      "entry-local-mixed",
+			Name:    "Local-Mixed",
+			Type:    "mixed",
+			Listen:  "127.0.0.1",
+			Port:    1080,
+			Enabled: true,
+		}},
+		Subscriptions: []SubscriptionConfig{{
+			ID:              "sub-main",
+			Name:            "main",
+			URL:             "https://example.com/sub",
+			Type:            "auto",
+			Enabled:         true,
+			RefreshInterval: 3600,
+		}},
+	})
+	cfg.Server.WebPort = 8080
+	cfg.Server.AdminUser = "admin"
+	cfg.Server.AdminPass = "password123"
+	if err := manager.ApplyConfig(cfg); err != nil {
+		t.Fatalf("ApplyConfig returned error: %v", err)
+	}
+
+	report, err := manager.ImportOutboundsReportWithOptions([]OutboundConfig{{
+		Name:     "US Test",
+		Protocol: "http",
+		Address:  "198.51.100.10",
+		Port:     8080,
+	}}, ImportOutboundsOptions{Provider: ProxyProviderConfig{Name: "main"}, FromSubscription: true})
+	if err != nil {
+		t.Fatalf("ImportOutboundsReportWithOptions returned error: %v", err)
+	}
+	if report.Added != 1 || len(report.Imported) != 1 {
+		t.Fatalf("expected one imported node, got %#v", report)
+	}
+	model := manager.V2ModelSnapshot()
+	if len(model.Nodes) != 1 || model.Nodes[0].Source != "subscription" || model.Nodes[0].SubscriptionID != "sub-main" {
+		t.Fatalf("expected subscription node in v2 node pool, got %#v", model.Nodes)
+	}
+	if len(model.RegionGroups) == 0 || len(model.AppPolicyGroups) == 0 {
+		t.Fatalf("expected v2 groups to remain available, got regions=%#v policies=%#v", model.RegionGroups, model.AppPolicyGroups)
+	}
+}
+
+func TestSetV2NodesEnabledUpdatesModel(t *testing.T) {
+	db, err := InitDatabase(filepath.Join(t.TempDir(), "nodetools.db"))
+	if err != nil {
+		t.Fatalf("InitDatabase returned error: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	manager := NewManager(db, "")
+	cfg := NormalizeV2Config(Config{
+		ModelVersion: "v2",
+		Kernel:       KernelConfig{Type: "placeholder"},
+		Entries: []EntryConfig{{
+			ID:      "entry-local-mixed",
+			Name:    "Local-Mixed",
+			Type:    "mixed",
+			Listen:  "127.0.0.1",
+			Port:    1080,
+			Enabled: true,
+		}},
+		Nodes: []OutboundNodeConfig{{
+			ID:        "node-manual",
+			Name:      "Manual",
+			Type:      "http",
+			Address:   "198.51.100.20",
+			Port:      8080,
+			Region:    "us",
+			Enabled:   true,
+			Source:    "manual",
+			RawConfig: map[string]any{"type": "http", "server": "198.51.100.20", "server_port": 8080},
+		}},
+	})
+	cfg.Server.WebPort = 8080
+	cfg.Server.AdminUser = "admin"
+	cfg.Server.AdminPass = "password123"
+	if err := manager.ApplyConfig(cfg); err != nil {
+		t.Fatalf("ApplyConfig returned error: %v", err)
+	}
+
+	if _, err := manager.SetV2NodesEnabled([]BatchNodeItem{
+		{Type: "inbound", Name: "entry-local-mixed"},
+		{Type: "outbound", Name: "node-manual"},
+	}, false); err != nil {
+		t.Fatalf("SetV2NodesEnabled returned error: %v", err)
+	}
+	model := manager.V2ModelSnapshot()
+	if len(model.Entries) != 1 || model.Entries[0].Enabled {
+		t.Fatalf("expected entry disabled in v2 model, got %#v", model.Entries)
+	}
+	if len(model.Nodes) != 1 || model.Nodes[0].Enabled {
+		t.Fatalf("expected node disabled in v2 model, got %#v", model.Nodes)
+	}
+}
+
 func TestProbeInboundGoogleUnsupportedProtocol(t *testing.T) {
 	health := probeHTTPProxyInboundGoogle(InboundConfig{Name: "vless-in", Protocol: "forward-tcp", Port: 443})
 	if health.Status != "unsupported" {
