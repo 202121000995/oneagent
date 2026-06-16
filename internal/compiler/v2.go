@@ -19,6 +19,7 @@ type InboundConfig struct {
 	Protocol       string         `json:"protocol"`
 	Listen         string         `json:"listen,omitempty"`
 	Port           int            `json:"port"`
+	Sniff          bool           `json:"sniff,omitempty"`
 	Username       string         `json:"username,omitempty"`
 	Password       string         `json:"password,omitempty"`
 	ProtocolConfig map[string]any `json:"protocol_config,omitempty"`
@@ -184,6 +185,7 @@ func compileEntries(entries []model.EntryConfig) []InboundConfig {
 			Protocol:       entry.Type,
 			Listen:         entry.Listen,
 			Port:           entry.Port,
+			Sniff:          entry.Sniff,
 			Username:       entry.Auth.Username,
 			Password:       entry.Auth.Password,
 			ProtocolConfig: entry.ProtocolConfig,

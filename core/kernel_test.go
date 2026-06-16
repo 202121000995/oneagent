@@ -9,7 +9,7 @@ func TestSingBoxKernelGenerateConfig(t *testing.T) {
 	kernel := NewSingBoxKernel()
 	state := RuntimeState{
 		Inbounds: []InboundConfig{
-			{Name: "local", Protocol: "socks", Listen: "127.0.0.1", Port: 1080},
+			{Name: "local", Protocol: "socks", Listen: "127.0.0.1", Port: 1080, Sniff: true},
 			{Name: "vless-in", Protocol: "vless", Port: 2080, UUID: "bf000d23-0752-40b4-affe-68f7707a9661", Flow: "xtls-rprx-vision"},
 			{Name: "socks-in", Protocol: "socks5", Port: 2081, Username: "in-user", Password: "in-pass"},
 			{Name: "reality-in", Protocol: "vless", Port: 2082, UUID: "bf000d23-0752-40b4-affe-68f7707a9661", Security: "reality", ServerName: "addons.mozilla.org", PrivateKey: "private", ShortID: "abcd", RealityHandshakeServer: "addons.mozilla.org", RealityHandshakePort: 443},
@@ -45,9 +45,16 @@ func TestSingBoxKernelGenerateConfig(t *testing.T) {
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		t.Fatalf("generated sing-box config is not json: %v", err)
 	}
+	logConfig := cfg["log"].(map[string]any)
+	if logConfig["level"] != "debug" || logConfig["output"] != "logs/sing-box.log" {
+		t.Fatalf("expected debug sing-box file logging, got %#v", logConfig)
+	}
 	inbounds := cfg["inbounds"].([]any)
 	if inbounds[0].(map[string]any)["type"] != "socks" {
 		t.Fatalf("expected socks inbound, got %#v", inbounds[0])
+	}
+	if _, ok := inbounds[0].(map[string]any)["sniff"]; ok {
+		t.Fatalf("legacy inbound sniff must not be generated for sing-box 1.13, got %#v", inbounds[0])
 	}
 	if inbounds[0].(map[string]any)["listen"] != "127.0.0.1" {
 		t.Fatalf("expected listen override, got %#v", inbounds[0])
@@ -141,10 +148,18 @@ func TestSingBoxKernelGenerateConfig(t *testing.T) {
 		t.Fatalf("expected default outbound final ss, got %#v", route)
 	}
 	rules := route["rules"].([]any)
-	if len(rules) != 3 {
-		t.Fatalf("expected 3 sing-box route rules, got %#v", rules)
+	if len(rules) != 4 {
+		t.Fatalf("expected sniff action plus 3 sing-box route rules, got %#v", rules)
 	}
-	if rules[1].(map[string]any)["domain_suffix"] == nil || rules[2].(map[string]any)["ip_cidr"] == nil {
+	sniffRule := rules[0].(map[string]any)
+	if sniffRule["action"] != "sniff" || sniffRule["timeout"] != "1s" {
+		t.Fatalf("expected sing-box route sniff action, got %#v", sniffRule)
+	}
+	sniffInbounds := sniffRule["inbound"].([]any)
+	if len(sniffInbounds) != 1 || sniffInbounds[0] != "local" {
+		t.Fatalf("expected sniff action to target local inbound, got %#v", sniffRule)
+	}
+	if rules[2].(map[string]any)["domain_suffix"] == nil || rules[3].(map[string]any)["ip_cidr"] == nil {
 		t.Fatalf("expected split route rules, got %#v", rules)
 	}
 }

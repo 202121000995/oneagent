@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"os"
+	"os/exec"
 	"strconv"
 	"strings"
 )
@@ -492,7 +493,7 @@ func RegisterAPI(mux *http.ServeMux, manager *Manager, auth *Auth) {
 	})))
 	mux.Handle("GET /api/logs", auth.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		query := r.URL.Query()
-		logs := tailLog("logs/agent.log", 120000)
+		logs := collectLogs(query.Get("source"), manager.ConfigSnapshot().Kernel.ConfigPath, 240000)
 		logs = filterLogLines(logs, query.Get("q"))
 		writeJSON(w, http.StatusOK, map[string]string{"logs": limitLogLines(logs, parsePositiveInt(query.Get("lines"), 300))})
 	})))
@@ -706,10 +707,61 @@ func writeError(w http.ResponseWriter, status int, message string) {
 	writeJSON(w, status, map[string]string{"error": message})
 }
 
+func collectLogs(source string, generatedConfigPath string, maxBytes int) string {
+	source = strings.ToLower(strings.TrimSpace(source))
+	if source == "" {
+		source = "agent"
+	}
+	switch source {
+	case "agent":
+		return logSection("agent", tailLog("logs/agent.log", maxBytes))
+	case "sing-box", "singbox":
+		return logSection("sing-box", tailLog("logs/sing-box.log", maxBytes))
+	case "systemd", "journal":
+		return logSection("systemd", serviceJournal(maxBytes))
+	case "config", "generated":
+		return logSection("generated-config", tailLog(generatedConfigPath, maxBytes))
+	case "all":
+		sections := []string{
+			logSection("agent", tailLog("logs/agent.log", maxBytes)),
+			logSection("sing-box", tailLog("logs/sing-box.log", maxBytes)),
+			logSection("systemd", serviceJournal(maxBytes)),
+			logSection("generated-config", tailLog(generatedConfigPath, maxBytes)),
+		}
+		return strings.Join(sections, "\n\n")
+	default:
+		return logSection("agent", tailLog("logs/agent.log", maxBytes))
+	}
+}
+
+func logSection(name string, content string) string {
+	if strings.TrimSpace(content) == "" {
+		content = "(empty)"
+	}
+	return "==== " + name + " ====\n" + content
+}
+
+func serviceJournal(maxBytes int) string {
+	output, err := exec.Command("journalctl", "-u", "nodetools-agent", "-n", "300", "--no-pager", "-o", "short-iso").CombinedOutput()
+	if err != nil && len(output) == 0 {
+		return err.Error()
+	}
+	if len(output) > maxBytes {
+		output = output[len(output)-maxBytes:]
+		if idx := strings.IndexByte(string(output), '\n'); idx >= 0 && idx+1 < len(output) {
+			output = output[idx+1:]
+		}
+	}
+	return string(output)
+}
+
 func tailLog(path string, maxBytes int) string {
+	if path == "" {
+		return ""
+	}
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return ""
+		return err.Error()
 	}
 	if len(data) > maxBytes {
 		data = data[len(data)-maxBytes:]

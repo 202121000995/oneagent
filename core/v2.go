@@ -108,6 +108,7 @@ func runtimeFromV2Compiler(runtime v2compiler.RuntimeState) RuntimeState {
 			Protocol:       inbound.Protocol,
 			Listen:         inbound.Listen,
 			Port:           inbound.Port,
+			Sniff:          inbound.Sniff,
 			Username:       inbound.Username,
 			Password:       inbound.Password,
 			ProtocolConfig: inbound.ProtocolConfig,

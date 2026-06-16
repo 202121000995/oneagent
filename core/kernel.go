@@ -293,12 +293,13 @@ func (k *SingBoxKernel) Name() string {
 
 func (k *SingBoxKernel) GenerateConfig(state RuntimeState) ([]byte, error) {
 	final := routeFinal(state.Routing)
-	route := map[string]any{"rules": singBoxRules(state.Routing), "final": final}
+	rules := append(singBoxSniffRules(state.Inbounds), singBoxRules(state.Routing)...)
+	route := map[string]any{"rules": rules, "final": final}
 	if ruleSets := singBoxRuleSets(state.Routing.RuleSets); len(ruleSets) > 0 {
 		route["rule_set"] = ruleSets
 	}
 	payload := map[string]any{
-		"log":       map[string]any{"level": "info", "timestamp": true},
+		"log":       map[string]any{"level": "debug", "timestamp": true, "output": "logs/sing-box.log"},
 		"inbounds":  singBoxInbounds(state.Inbounds),
 		"outbounds": singBoxOutbounds(state.Outbounds),
 		"route":     route,
@@ -700,6 +701,21 @@ func singBoxRules(routing RoutingConfig) []map[string]any {
 			continue
 		}
 		items = append(items, item)
+	}
+	return items
+}
+
+func singBoxSniffRules(inbounds []InboundConfig) []map[string]any {
+	items := make([]map[string]any, 0)
+	for _, inbound := range inbounds {
+		if inbound.Disabled || !inbound.Sniff || inbound.Name == "" {
+			continue
+		}
+		items = append(items, map[string]any{
+			"inbound": []string{inbound.Name},
+			"action":  "sniff",
+			"timeout": "1s",
+		})
 	}
 	return items
 }

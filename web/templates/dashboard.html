@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>NodeTools Agent</title>
-  <link rel="stylesheet" href="/static/css/style.css?v=20260616-v2-flow-cleanup">
+  <link rel="stylesheet" href="/static/css/style.css?v=20260616-log-capture">
 </head>
 <body>
   <div class="app-shell">
@@ -487,6 +487,13 @@ sudo sh /opt/nodetools-agent/current/rollback-offline.sh</textarea></label>
           </div>
           <div class="table-tools log-tools">
             <input id="logSearch" placeholder="过滤日志关键字">
+            <select id="logSource">
+              <option value="agent">Agent</option>
+              <option value="sing-box">sing-box</option>
+              <option value="systemd">systemd</option>
+              <option value="config">生成配置</option>
+              <option value="all">全部</option>
+            </select>
             <select id="logLines">
               <option value="200">最近 200 行</option>
               <option value="500">最近 500 行</option>
@@ -676,6 +683,6 @@ sudo sh /opt/nodetools-agent/current/rollback-offline.sh</textarea></label>
     </section>
   </div>
 
-  <script src="/static/js/dashboard.js?v=20260616-v2-flow-cleanup"></script>
+  <script src="/static/js/dashboard.js?v=20260616-log-capture"></script>
 </body>
 </html>

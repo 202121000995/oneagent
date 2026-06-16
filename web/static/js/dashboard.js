@@ -915,6 +915,7 @@ const refreshLogs = async () => {
   const logOutput = document.getElementById("logOutput");
   if (!logOutput) return;
   const query = new URLSearchParams({
+    source: document.getElementById("logSource")?.value || "agent",
     q: document.getElementById("logSearch")?.value || "",
     lines: document.getElementById("logLines")?.value || "200",
   });
@@ -1618,6 +1619,7 @@ document.querySelectorAll("[data-page-target]").forEach((button) => {
 document.getElementById("inboundSearch")?.addEventListener("input", renderInbounds);
 document.getElementById("outboundSearch")?.addEventListener("input", renderOutbounds);
 document.getElementById("logSearch")?.addEventListener("input", refreshLogs);
+document.getElementById("logSource")?.addEventListener("change", refreshLogs);
 document.getElementById("logLines")?.addEventListener("change", refreshLogs);
 document.getElementById("refreshLogsButton")?.addEventListener("click", refreshLogs);
 document.getElementById("refreshSystemButton")?.addEventListener("click", refresh);

@@ -2695,6 +2695,7 @@ func v2EntryToInbound(entry EntryConfig) InboundConfig {
 		Listen:         entry.Listen,
 		Port:           entry.Port,
 		Disabled:       !entry.Enabled,
+		Sniff:          entry.Sniff,
 		Username:       entry.Auth.Username,
 		Password:       entry.Auth.Password,
 		ProtocolConfig: entry.ProtocolConfig,

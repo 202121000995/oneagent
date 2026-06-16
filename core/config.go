@@ -41,6 +41,7 @@ type InboundConfig struct {
 	Port                   int            `yaml:"port" json:"port"`
 	Outbound               string         `yaml:"-" json:"outbound,omitempty"`
 	Disabled               bool           `yaml:"disabled,omitempty" json:"disabled,omitempty"`
+	Sniff                  bool           `yaml:"sniff,omitempty" json:"sniff,omitempty"`
 	Username               string         `yaml:"username,omitempty" json:"username,omitempty"`
 	UUID                   string         `yaml:"uuid,omitempty" json:"uuid,omitempty"`
 	Password               string         `yaml:"password,omitempty" json:"password,omitempty"`

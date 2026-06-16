@@ -32,7 +32,7 @@ func TestNormalizeV2ConfigClassifiesLegacyNodes(t *testing.T) {
 
 func TestCompileV2RuntimeBuildsPolicyChain(t *testing.T) {
 	cfg := NormalizeV2Config(Config{
-		Entries: []EntryConfig{{ID: "entry-socks-main", Name: "主入口", Type: "socks", Listen: "0.0.0.0", Port: 1080, Enabled: true}},
+		Entries: []EntryConfig{{ID: "entry-socks-main", Name: "主入口", Type: "socks", Listen: "0.0.0.0", Port: 1080, Enabled: true, Sniff: true}},
 		Nodes: []OutboundNodeConfig{{
 			ID:      "node-sg-001",
 			Name:    "新加坡 01",
@@ -63,6 +63,10 @@ func TestCompileV2RuntimeBuildsPolicyChain(t *testing.T) {
 	if err := json.Unmarshal(data, &generated); err != nil {
 		t.Fatalf("generated config is not JSON: %v", err)
 	}
+	inbounds := generated["inbounds"].([]any)
+	if _, ok := inbounds[0].(map[string]any)["sniff"]; ok {
+		t.Fatalf("legacy inbound sniff must not be generated for sing-box 1.13, got %#v", inbounds[0])
+	}
 	outbounds := generated["outbounds"].([]any)
 	tags := map[string]map[string]any{}
 	for _, raw := range outbounds {
@@ -86,8 +90,16 @@ func TestCompileV2RuntimeBuildsPolicyChain(t *testing.T) {
 		t.Fatalf("expected inline rule sets, got %#v", route)
 	}
 	rules := route["rules"].([]any)
-	if rules[0].(map[string]any)["rule_set"] == nil {
-		t.Fatalf("expected first-match rule_set rules, got %#v", rules)
+	sniffRule := rules[0].(map[string]any)
+	if sniffRule["action"] != "sniff" || sniffRule["timeout"] != "1s" {
+		t.Fatalf("expected v2 entry sniff to compile to sing-box route action, got %#v", sniffRule)
+	}
+	sniffInbounds := sniffRule["inbound"].([]any)
+	if len(sniffInbounds) != 1 || sniffInbounds[0] != "entry-socks-main" {
+		t.Fatalf("expected v2 sniff action to target entry-socks-main, got %#v", sniffRule)
+	}
+	if rules[1].(map[string]any)["rule_set"] == nil {
+		t.Fatalf("expected first-match rule_set rules after sniff action, got %#v", rules)
 	}
 }
 
