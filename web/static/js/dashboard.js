@@ -1136,9 +1136,9 @@ const fillRoutingForm = (routing) => {
   const form = document.getElementById("routingForm");
   if (!form) return;
   renderOutboundOptions();
-  form.elements.mode.value = routing.mode || "rule";
+  form.elements.mode.value = "rule";
   form.elements.preset.value = routing.preset || "custom";
-  form.elements.default_outbound.value = routing.default_outbound || "direct";
+  form.elements.default_outbound.value = "policy-final";
   renderRoutingRules(routing.rules || []);
   updateRoutingModeUI();
 };
@@ -1183,10 +1183,9 @@ const renderRoutingRules = (rules = []) => {
   rows.innerHTML = rules.map((rule, index) => {
     const matchType = routingRuleMatchType(rule);
     const value = routingRuleValue(rule);
-    const priority = rule.order || rule.priority || (index + 1) * 10;
     return `
       <tr data-routing-rule>
-        <td><input name="priority" type="number" min="1" value="${priority}"></td>
+        <td><span class="route-order-badge">${index + 1}</span></td>
         <td>
           <select name="match_type">
             ${routingMatchTypes.map(([key, label]) => `<option value="${key}"${key === matchType ? " selected" : ""}>${label}</option>`).join("")}
@@ -1211,7 +1210,7 @@ const collectRoutingRules = () => Array.from(document.querySelectorAll("[data-ro
     const matchType = row.querySelector('[name="match_type"]')?.value || "domain_suffix";
     const value = row.querySelector('[name="value"]')?.value || "";
     const outbound = row.querySelector('[name="outbound"]')?.value || "direct";
-    const priority = Number(row.querySelector('[name="priority"]')?.value || (index + 1) * 10);
+    const priority = (index + 1) * 10;
     const rule = {
       id: `rule-${matchType}-${index + 1}`,
       name: `${matchType}-${index + 1}`,
@@ -1235,53 +1234,25 @@ const addRoutingRule = (rule = {}) => {
     match_type: rule.match_type || "domain_suffix",
     value: rule.value || "",
     inbound: rule.inbound || "",
-    outbound: rule.outbound || document.getElementById("defaultOutboundSelect")?.value || "direct",
+    outbound: rule.outbound || "policy-final",
     priority: rule.priority || (current.length + 1) * 10,
     disabled: Boolean(rule.disabled),
   });
   renderRoutingRules(current);
 };
 
-const applyBypassChinaPreset = () => {
-  const defaultSelect = document.getElementById("defaultOutboundSelect");
-  if (defaultSelect?.value === "direct") {
-    defaultSelect.value = "policy-final";
-  }
-  document.getElementById("routingModeSelect").value = "rule";
-  document.getElementById("routingPresetInput").value = "bypass_cn";
-  renderRoutingRules([
-    { match_type: "ip_cidr", value: "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,127.0.0.0/8,100.64.0.0/10", outbound: "direct", priority: 10 },
-    { match_type: "geosite", value: "cn", outbound: "direct", priority: 20 },
-    { match_type: "geoip", value: "cn", outbound: "direct", priority: 30 },
-  ]);
-  updateRoutingModeUI();
-};
-
 const updateRoutingModeUI = () => {
-  const mode = document.getElementById("routingModeSelect")?.value || "rule";
-  const defaultSelect = document.getElementById("defaultOutboundSelect");
+  const mode = "rule";
   const rulesPanel = document.getElementById("routingRulesPanel");
   const addButton = document.getElementById("addRoutingRuleButton");
-  const presetButton = document.getElementById("bypassChinaPresetButton");
   const hint = document.getElementById("routingModeHint");
 
   const ruleMode = mode === "rule";
-  const globalMode = mode === "global";
-  if (defaultSelect) {
-    defaultSelect.disabled = mode === "direct";
-    defaultSelect.closest("label")?.classList.toggle("routing-disabled", mode === "direct");
-  }
   if (rulesPanel) rulesPanel.hidden = !ruleMode;
   if (addButton) addButton.hidden = !ruleMode;
-  if (presetButton) presetButton.hidden = !ruleMode;
   if (hint) {
-    hint.textContent = {
-      direct: "全部直连：所有流量直接从 VPS 出口访问，不使用默认出站，分流规则不会生效。",
-      global: "全局代理：所有流量都走默认出站，下面的分流规则不会生效。",
-      rule: "规则分流：先按下方规则匹配，未命中流量走默认出站。V2 推荐使用 sing-box rule_set 管理应用规则。",
-    }[mode] || "";
+    hint.textContent = "规则按列表顺序从上到下匹配，未命中流量走 Final。普通应用分流建议在“应用策略组”里维护。";
   }
-  if (globalMode) document.getElementById("routingPresetInput").value = "custom";
 };
 
 const subscriptionPayloadFromForm = (form) => {
@@ -1694,7 +1665,6 @@ document.getElementById("policyGroupCandidateList")?.addEventListener("change", 
 });
 document.getElementById("routingModeSelect")?.addEventListener("change", updateRoutingModeUI);
 document.getElementById("addRoutingRuleButton")?.addEventListener("click", () => addRoutingRule());
-document.getElementById("bypassChinaPresetButton")?.addEventListener("click", applyBypassChinaPreset);
 document.getElementById("routingRuleRows")?.addEventListener("change", (event) => {
   const preset = document.getElementById("routingPresetInput");
   if (preset) preset.value = "custom";
@@ -2158,7 +2128,7 @@ document.getElementById("previewRoutingButton")?.addEventListener("click", async
         `模式: ${payload.mode}`,
         `最终出站: ${payload.outbound}`,
         `原因: ${payload.reason}`,
-        payload.matched_rule ? `命中规则: ${payload.matched_rule} / ${payload.match_type}=${payload.value} / 优先级 ${payload.priority}` : "",
+        payload.matched_rule ? `命中规则: ${payload.matched_rule} / ${payload.match_type}=${payload.value}` : "",
         ...((payload.warnings || []).map((warning) => `提示: ${warning}`)),
       ].filter(Boolean).join("\n"), "success");
     }
